@@ -3,16 +3,6 @@ from omegaconf import DictConfig
 from ark_ml.arkml.core.registry import MODELS
 
 
-# def build_model(model_cfg: DictConfig):
-#     """Build a model from config using the MODELS registry."""
-#     model_cls = MODELS.get(model_cfg.name)
-#     kwargs = {k: v for k, v in model_cfg[model_cfg.name].items() if k != "name"}
-#     return model_cls(**kwargs)
-
-
-# from omegaconf import DictConfig
-# from core.utils.registry import MODELS
-
 def build_model(model_cfg: DictConfig):
     """Build a model from config using the MODELS registry.
 

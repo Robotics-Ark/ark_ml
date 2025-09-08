@@ -17,5 +17,4 @@ class Registry:
 # Global registries
 ALGOS = Registry()
 DATASETS = Registry()
-TASKS = Registry()
 MODELS = Registry()

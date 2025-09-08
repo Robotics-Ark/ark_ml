@@ -6,9 +6,9 @@ model:
   model_path: lerobot/pi0
   obs_dim: 10
   action_dim: 8         # Action dimension
-  obs_horizon: 8        # Observation dimension
-  pred_horizon: 16      # TODO need to check
-  action_horizon: 8     # TODO need to check
+  obs_horizon: 1        # Observation dimension
+  pred_horizon: 16
+  action_horizon: 1
   image_shape: (3, 480, 640) # Image dimension (b,c,h,w)
 
 trainer:

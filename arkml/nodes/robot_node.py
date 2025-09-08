@@ -89,12 +89,10 @@ class RobotNode:
             state.extend(list(ob["gripper"]))
             state.extend(list(ob["franka_ee"][0]))
             states.append(torch.tensor(state, dtype=torch.float32))
-            # break # TODO needs to check how to handle 8 batches
 
         obs['image'] = torch.stack(imgs, dim=0)
         obs['state'] = torch.stack(states, dim=0)
-        obs['task'] =  [task_prompt] * 8
-        # breakpoint()
+        obs['task'] =  [task_prompt] * obs['state'].shape[0]
         return obs
 
     def run_episode(self, max_steps: int, action_horizon: int, step_sleep: float, start_offset: int, task_prompt: str):

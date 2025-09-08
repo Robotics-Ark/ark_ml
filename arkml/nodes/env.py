@@ -22,6 +22,7 @@ class RobotEnv(ArkEnv):
             environment_name: str,
             action_channels: dict[str, type],
             observation_channels: dict[str, type],
+            max_steps:int,
             sim=True
     ):
         super().__init__(
@@ -32,10 +33,7 @@ class RobotEnv(ArkEnv):
             sim=sim,
         )
         self.sim = sim
-        self.config = config
-        self.state_dim = 10  # config.get("state_dim", 10) TODO
-        self.action_dim = 8  # config.get("action_dim", 8) TODO
-        self.max_steps = 500  # TDOD
+        self.max_steps = max_steps
         self.steps = 0
 
     @staticmethod
@@ -170,8 +168,8 @@ class RobotEnv(ArkEnv):
         if terminated:
             print("Cube is close enough to the target. Terminating episode.")
 
-        truncated = bool(self.steps >= getattr(self, 'max_steps', 200))
+        truncated = bool(self.steps >= self.max_steps)
         if truncated:
             print("Max steps reached. Terminating episode.")
 
-        return terminated, truncated, getattr(self, 'steps', 0)
+        return terminated, truncated, self.steps

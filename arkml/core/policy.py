@@ -12,7 +12,7 @@ class BasePolicy(ABC):
         ...
 
     def reset(self):
-        pass
+        ...
 
     def to_device(self, device: str):
         return self
