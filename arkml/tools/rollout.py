@@ -54,6 +54,7 @@ def main(cfg: DictConfig) -> None:
         environment_name=getattr(cfg, "environment_name"),
         action_channels=chans["actions"],
         observation_channels=chans["observations"],
+        max_steps=cfg.max_steps,
         sim=True,
     )
 
@@ -61,7 +62,6 @@ def main(cfg: DictConfig) -> None:
     device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     policy_node = get_policy_node(cfg, device)
-    # policy_node = np.random.randn(10, 3)
 
     # Robot node to manage history and interaction
     obs_horizon = cfg.algo.model.get("obs_horizon")
@@ -73,8 +73,8 @@ def main(cfg: DictConfig) -> None:
     success_count = 0
     for ep in range(n_episodes):
         print(f"\n=== Episode {ep} ===")
-        # Reset policy state between episodes if applicable
-        policy_node.reset()  # TODO uncomment
+        # Reset policy state between episodes
+        policy_node.reset()
 
         # For diffusion policies, offset start to ensure history is filled
         slice_start = (obs_horizon + 1) if cfg.algo.name == "diffusion_policy" else 0  # TODO: verify
