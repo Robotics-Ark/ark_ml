@@ -1,0 +1,26 @@
+name: action_chunking_transformer
+model :
+  type: ACTransformer
+  name: ACTransformer
+  obs_dim: 10
+  action_dim: 8
+
+
+trainer :
+  seed: 42
+  chunk_size: 50
+  batch_size: 2
+  epochs: 10
+  lr: 1e-5
+  weight_decay: 0.0
+  grad_clip: 1.0
+  beta: 10.0
+  d_model: 512
+  ffn_dim: 3200
+  nhead: 8
+  enc_layer: 8
+  dec_layers: 7
+  dropout: 0.1
+  num_workers: 4
+  image_size: 256
+  amp: True
