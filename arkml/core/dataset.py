@@ -12,7 +12,6 @@ class ArkDataset(Dataset, ABC):
     This class provides the common functionality to load trajectory data from
     a directory of serialized files (e.g., .pkl files). Subclasses must implement
     the __getitem__ method to define how individual samples are returned.
-
     Attributes:
         dataset_path (str): Path to the directory containing dataset files.
         trajectories (List[Any]): List of loaded trajectory data.

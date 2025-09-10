@@ -27,6 +27,7 @@ def main(cfg: DictConfig):
         num_workers=cfg.algo.trainer.num_workers,
         pin_memory=True,
         persistent_workers=True,
+        collate_fn=dataset.collate_fn,
     )
 
     # Build model (policy)

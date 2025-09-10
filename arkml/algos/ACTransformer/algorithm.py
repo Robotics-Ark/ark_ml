@@ -1,7 +1,7 @@
 import torch
 from ark_ml.arkml.core.registry import ALGOS
 
-from arkml.core.algorithm import BaseAlgorithm
+from ark_ml.arkml.core.algorithm import BaseAlgorithm
 
 
 @ALGOS.register("action_chunking_transformer")
