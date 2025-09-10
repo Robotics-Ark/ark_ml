@@ -12,6 +12,7 @@ class PiZeroTrainer:
         self.optimizer = optimizer
         self.device = device
 
+
     def fit(self, dataloader: DataLoader, epochs: int = 100):
         self.model.train()
         for epoch in range(epochs):
