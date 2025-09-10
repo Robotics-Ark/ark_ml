@@ -6,14 +6,14 @@ from ark_ml.arkml.core.policy import BasePolicy
 
 class Trainer(ABC):
     @abstractmethod
-    def fit(self, *args, **kwargs) -> Dict[str, Any]:
-        ...
+    def fit(self, *args, **kwargs) -> dict[str, Any]:
+        raise NotImplementedError
 
 
 class Evaluator(ABC):
     @abstractmethod
-    def evaluate(self, *args, **kwargs) -> Dict[str, Any]:
-        ...
+    def evaluate(self, *args, **kwargs) -> dict[str, Any]:
+        raise NotImplementedError
 
 
 class BaseAlgorithm(ABC):

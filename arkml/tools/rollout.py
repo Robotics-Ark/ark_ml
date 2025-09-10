@@ -29,7 +29,7 @@ def default_channels() -> dict[str, dict[str, type]]:
     return {"actions": action_channels, "observations": observation_channels}
 
 
-@hydra.main(config_path="../configs", config_name="defaults.yaml")
+@hydra.main(config_path="../configs", config_name="defaults.yaml", version_base="1.3")
 def main(cfg: DictConfig) -> None:
     """Run rollouts for a configured policy.
 
