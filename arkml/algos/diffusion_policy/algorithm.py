@@ -1,7 +1,7 @@
-from ark_ml.arkml.algos.diffusion_policy.evaluator import DiffusionEvaluator
-from ark_ml.arkml.algos.diffusion_policy.trainer import DiffusionTrainer
-from ark_ml.arkml.core.algorithm import BaseAlgorithm
-from ark_ml.arkml.core.registry import ALGOS
+from arkml.algos.diffusion_policy.evaluator import DiffusionEvaluator
+from arkml.algos.diffusion_policy.trainer import DiffusionTrainer
+from arkml.core.algorithm import BaseAlgorithm
+from arkml.core.registry import ALGOS
 
 
 @ALGOS.register("diffusion_policy")

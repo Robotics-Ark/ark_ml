@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torchvision.models import resnet18, ResNet18_Weights
-from ark_ml.arkml.core.registry import MODELS
+from arkml.core.registry import MODELS
 
 def sinusoid_1d(length, dim, device, dtype=torch.float32):
     pos = torch.arange(length, device=device, dtype=dtype).unsqueeze(1)          # (L,1)
@@ -145,17 +145,33 @@ class ACT(nn.Module):
     def build_memory(self, image, joints, z):
         """
         image:  (B,3,H,W)
-        joints: (B,J)
+        joints: (B,J) or (B,1,J)  <-- we normalize this
         z:      (B, z_dim)
-        returns memory: (B, N_ctx, d)
+        returns: (B, N_ctx, d)
         """
         B = image.size(0)
-        img_tokens = self.img_enc(image)                 # (B, hw, d)
-        joints_tok = self.joint_proj(joints).unsqueeze(1)
-        z_tok = self.z_proj(z).unsqueeze(1)
-        cls = self.cls_token.expand(B, 1, -1)
+
+        # Normalize joints to (B, J)
+        if joints.dim() == 3 and joints.size(1) == 1:
+            joints = joints.squeeze(1)  # (B, J)
+        elif joints.dim() == 1:
+            joints = joints.unsqueeze(0)  # (1, J) -> (B, J) if B==1
+        elif joints.dim() != 2:
+            raise ValueError(f"Expected joints to be (B,J) or (B,1,J), got {tuple(joints.shape)}")
+
+        img_tokens = self.img_enc(image)  # (B, hw, d)
+        joints_tok = self.joint_proj(joints).unsqueeze(1)  # (B, 1, d)
+        z_tok = self.z_proj(z).unsqueeze(1)  # (B, 1, d)
+        cls = self.cls_token.expand(B, 1, -1)  # (B, 1, d)
+
+        # sanity checks (optional)
+        # assert img_tokens.dim() == 3 and img_tokens.shape[-1] == self.d_model
+        # assert cls.shape == z_tok.shape == joints_tok.shape == (B, 1, self.d_model)
+
         tokens = torch.cat([cls, z_tok, joints_tok, img_tokens], dim=1)  # (B, N, d)
-        return self.obs_encoder(tokens)                  # (B, N, d)
+        return self.obs_encoder(tokens)
+
+        # (B, N, d)
 
 
     def decode_actions(self, memory, K):

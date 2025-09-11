@@ -1,7 +1,7 @@
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 import torch
 
-from ark_ml.arkml.nodes.policy_node import PolicyNode
+from arkml.nodes.policy_node import PolicyNode
 
 
 class DiffusionPolicyNode(PolicyNode):

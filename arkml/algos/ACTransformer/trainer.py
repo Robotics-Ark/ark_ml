@@ -2,58 +2,53 @@
 import os
 import torch
 from tqdm import tqdm
-from torch.utils.data import DataLoader
-from models import masked_l1, kl_loss
+from arkml.algos.ACTransformer.models import masked_l1, kl_loss
 from contextlib import nullcontext
-from ark_ml.arkml.core.algorithm import Trainer
-from ark_ml.arkml.core.registry import DATASETS, MODELS
+from arkml.core.algorithm import Trainer
+from arkml.core.registry import DATASETS, MODELS
+
+
 
 class ACTransformerTrainer(Trainer):
-    def __init__(self, cfg, device="cuda"):
+    def __init__(self, model,dataloader,
+    epochs: int = 1,
+    lr: float = 1e-5,
+    weight_decay: float = 0.0,
+    grad_clip: float = 1.0,
+    beta: float = 10.0,
+    device="cuda"):
         self.device = device
-        self.cfg = cfg
+        self.epochs = epochs
+        self.beta = beta
+    
+        self.dataloader = dataloader
 
-        # Build dataset
-        dataset_cls = DATASETS.get(cfg.data.name)
-        self.dataset = dataset_cls(**cfg.data)
-        # Use a sensible num_workers if available; fall back to 0 instead of batch_size
-        num_workers = getattr(self.cfg.data, "num_workers", 0)
-        self.dataloader = DataLoader(
-            self.dataset,
-            batch_size=self.cfg.data.batch_size,
-            shuffle=True,
-            num_workers=num_workers
-        )
-
-        # Build model
-        model_cls = MODELS.get(cfg.algo.model.name)
-        self.model = model_cls().to(self.device)
+        self.model = model.to(self.device)
 
         self.optimizer = torch.optim.Adam(
             self.model.parameters(),
-            lr=self.cfg.trainer.lr,
-            weight_decay=self.cfg.trainer.weight_decay
+            lr=lr,
+            weight_decay=weight_decay
         )
         self.reconstruction_loss = masked_l1
         self.kl_loss = kl_loss
+        self.grad_clip = grad_clip
 
         self.amp_ctx = (
             torch.autocast(device_type=self.device, dtype=torch.float16)
-            if getattr(cfg, "amp", False) and self.device in ("cuda", "mps")
+            if self.device in ("cuda", "mps")
             else nullcontext()
         )
 
         self.scaler = None
-        if getattr(cfg, "amp", False) and self.device == "cuda":
+        if self.device == "cuda":
             try:
                 self.scaler = torch.cuda.amp.GradScaler(enabled=True)
             except Exception:
                 self.scaler = None
 
-        # --- Checkpointing state ---
         self.best_train_loss = float("inf")
-        # let cfg.trainer.checkpoint_path override; default to "./best.ckpt"
-        self.ckpt_path = getattr(self.cfg.trainer, "checkpoint_path", "./best.ckpt")
+        self.ckpt_path = "./ckpt_path_act/"
 
     def _save_checkpoint(self, epoch: int, train_loss: float):
         os.makedirs(os.path.dirname(self.ckpt_path) or ".", exist_ok=True)
@@ -64,14 +59,13 @@ class ACTransformerTrainer(Trainer):
                 "optimizer_state_dict": self.optimizer.state_dict(),
                 "scaler_state_dict": (self.scaler.state_dict() if self.scaler is not None else None),
                 "train_loss": train_loss,
-                "cfg": self.cfg,
             },
             self.ckpt_path,
         )
 
-    def train(self):
+    def fit(self):
         self.model.train()
-        for epoch in tqdm(range(self.cfg.trainer.epochs), desc="Epochs"):
+        for epoch in tqdm(range(self.epochs), desc="Epochs"):
             epoch_loss = 0.0
             step = 0
 
@@ -79,7 +73,7 @@ class ACTransformerTrainer(Trainer):
                 state = batch["state"].to(self.device)
                 image = batch["image"].to(self.device)
                 target = batch["action_chunk"].to(self.device)
-                mask = batch["mask"].to(self.device)
+                mask = batch["action_mask"].to(self.device)
 
                 self.optimizer.zero_grad(set_to_none=True)
 
@@ -88,12 +82,12 @@ class ACTransformerTrainer(Trainer):
                         pred, mu, logvar = self.model(image, state, target, mask)
                         reconstruction_loss = self.reconstruction_loss(pred, target, mask)
                         kl_loss_ = self.kl_loss(mu, logvar).mean()
-                        loss = reconstruction_loss + (self.cfg.beta * kl_loss_)
+                        loss = reconstruction_loss + (self.beta * kl_loss_)
                     self.scaler.scale(loss).backward()
-                    if getattr(self.cfg, "grad_clipping", None):
+                    if self.grad_clip:
                         self.scaler.unscale_(self.optimizer)
                         torch.nn.utils.clip_grad_norm_(
-                            self.model.parameters(), self.cfg.grad_clipping
+                            self.model.parameters(), self.grad_clip
                         )
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
@@ -102,15 +96,15 @@ class ACTransformerTrainer(Trainer):
                         pred, mu, logvar = self.model(image, state, target, mask)
                         reconstruction_loss = self.reconstruction_loss(pred, target, mask)
                         kl_loss_ = self.kl_loss(mu, logvar).mean()
-                        loss = reconstruction_loss + (self.cfg.beta * kl_loss_)
+                        loss = reconstruction_loss + (self.beta * kl_loss_)
                     loss.backward()
-                    if getattr(self.cfg, "grad_clipping", None):
+                    if self.grad_clip:
                         torch.nn.utils.clip_grad_norm_(
-                            self.model.parameters(), self.cfg.grad_clipping
+                            self.model.parameters(), self.grad_clip
                         )
                     self.optimizer.step()
 
-                # --- accumulate epoch stats correctly inside the inner loop ---
+
                 epoch_loss += loss.item()
                 step += 1
 
@@ -126,9 +120,8 @@ class ACTransformerTrainer(Trainer):
                     f"Saved checkpoint to {self.ckpt_path}."
                 )
 
-            # periodic logging
             if (epoch + 1) % 10 == 0:
                 print(
-                    f"Epoch [{epoch + 1}/{self.cfg.trainer.epochs}] "
+                    f"Epoch [{epoch + 1}/{self.epochs}] "
                     f"Loss: {train_loss:.6f}"
                 )

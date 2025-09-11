@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 
-from ark_ml.arkml.core.algorithm import Evaluator
+from arkml.core.algorithm import Evaluator
 
 
 class DiffusionEvaluator(Evaluator):

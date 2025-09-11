@@ -7,7 +7,7 @@ from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from diffusers.training_utils import EMAModel
 from tqdm.auto import tqdm
 
-from ark_ml.arkml.core.algorithm import Trainer
+from arkml.core.algorithm import Trainer
 
 
 class DiffusionTrainer(Trainer):

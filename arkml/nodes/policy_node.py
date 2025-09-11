@@ -14,8 +14,8 @@ class PolicyNode(ABC):
 
     def __init__(self, policy: nn.Module, device: str):
         self.policy = policy
-        self.policy.load_mode_to_device(device=device)
-        self.policy.set_eval_mode()
+        self.policy.to(device=device)
+
 
     def reset(self) -> None:
         """Reset the internal state of the policy.

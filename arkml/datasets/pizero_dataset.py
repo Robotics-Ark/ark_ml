@@ -2,8 +2,8 @@ import torch
 from PIL import Image
 from torchvision import transforms
 
-from ark_ml.arkml.core.dataset import ArkDataset
-from ark_ml.arkml.core.registry import DATASETS
+from arkml.core.dataset import ArkDataset
+from arkml.core.registry import DATASETS
 
 
 @DATASETS.register("pizero_dataset")

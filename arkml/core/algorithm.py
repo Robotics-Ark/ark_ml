@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Any
 
-from ark_ml.arkml.core.policy import BasePolicy
+from arkml.core.policy import BasePolicy
 
 
 class Trainer(ABC):

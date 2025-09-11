@@ -1,7 +1,7 @@
 import torch
 
-from ark_ml.arkml.algos.vla.pizero.models import PiZeroNet
-from ark_ml.arkml.nodes.policy_node import PolicyNode
+from arkml.algos.vla.pizero.models import PiZeroNet
+from arkml.nodes.policy_node import PolicyNode
 
 
 class PiZeroPolicyNode(PolicyNode):

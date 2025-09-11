@@ -3,9 +3,9 @@ import torch
 from arktypes import task_space_command_t, pose_t, joint_state_t, rigid_body_state_t, rgbd_t
 from omegaconf import DictConfig, OmegaConf
 
-from ark_ml.arkml.nodes.env import RobotEnv
-from ark_ml.arkml.nodes.policy_registry import get_policy_node
-from ark_ml.arkml.nodes.robot_node import RobotNode
+from arkml.nodes.env import RobotEnv
+from arkml.nodes.policy_registry import get_policy_node
+from arkml.nodes.robot_node import RobotNode
 
 
 def default_channels() -> dict[str, dict[str, type]]:
@@ -60,13 +60,13 @@ def main(cfg: DictConfig) -> None:
 
     # Device
     device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
     policy_node = get_policy_node(cfg, device)
 
+
     # Robot node to manage history and interaction
-    obs_horizon = cfg.algo.model.get("obs_horizon")
     action_horizon = cfg.algo.model.get("action_horizon")
-    robot_node = RobotNode(env=env, policy_node=policy_node, obs_horizon=obs_horizon)
+    obs_horizon=1
+    robot_node = RobotNode(env=env, policy_node=policy_node, obs_horizon=1)
 
     n_episodes = int(getattr(cfg, "n_episodes"))
 
@@ -79,7 +79,7 @@ def main(cfg: DictConfig) -> None:
         # For diffusion policies, offset start to ensure history is filled
         slice_start = (obs_horizon + 1) if cfg.algo.name == "diffusion_policy" else 0  # TODO: verify
         _, terminated, truncated = robot_node.run_episode(
-            max_steps=int(getattr(cfg, "max_steps", 200)),
+            max_steps=int(getattr(cfg, "max_steps", 500)),
             action_horizon=action_horizon,
             step_sleep=float(getattr(cfg, "step_sleep", 0.0)),
             start_offset=int(getattr(cfg, "start_offset", slice_start)),

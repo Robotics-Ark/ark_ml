@@ -1,25 +1,24 @@
-import os
-import pickle
 from typing import Any, Dict, List, Tuple, Optional
-
+import numpy as np
 import torch
 from torch.utils.data import Dataset
+from arkml.core.registry import DATASETS
+from torchvision import transforms as T
+from arkml.core.dataset import ArkDataset
 
-from ark_ml.arkml.core.dataset import ArkDataset
+tfm = T.Compose([
+    T.ToTensor(),
+    T.Resize((256, 256), antialias=True),
+])
 
 def _split_state(state: Any) -> Tuple[torch.Tensor, Any]:
-    """
-    Expects indexable `state`:
-      - first 10 entries -> numeric vector (10,)
-      - index 10 -> image-like object (kept as-is)
-    """
     if not hasattr(state, "__getitem__"):
         raise TypeError(f"state must be indexable, got {type(state)}")
     if len(state) < 11:
         raise ValueError(f"state must have at least 11 items (10-dim + image), got {len(state)}")
     s_vec = state[:10]
     s_t = torch.as_tensor(s_vec, dtype=torch.float32)
-    img = state[10]
+    img = tfm(state[10])
     return s_t, img
 
 def _to_action_tensor(action: Any) -> torch.Tensor:
@@ -28,8 +27,7 @@ def _to_action_tensor(action: Any) -> torch.Tensor:
         raise ValueError(f"action must have 8 elements, got shape {tuple(a.shape)} with {a.numel()} elems")
     return a.reshape(8)
 
-# ---------------- Dataset ----------------
-
+@DATASETS.register("act_dataset")
 class ActionChunkingDataset(ArkDataset):
     """
     Returns samples of the form:
@@ -45,21 +43,20 @@ class ActionChunkingDataset(ArkDataset):
       - The dataset directory contains .pkl files. Each file may contain:
           (a) a single trajectory (list[dict]), or
           (b) a list of trajectories (list[list[dict]]).
-      - We load via ArkDataset._load_trajectories() for consistency.
     """
 
-    def __init__(self, dataset_path: str, chunk_size: int = 8):
+    def __init__(self, dataset_path: str, transform, chunk_size: int = 8 ):
         super().__init__(dataset_path=dataset_path)
         self.chunk_size = int(chunk_size)
 
-        # Load all files the "ArkDataset way"
         self._load_trajectories()
 
         # Normalize into a flat list of trajectories: List[List[dict]]
         self._trajs: List[List[dict]] = self._flatten_trajectories(self.trajectories)
 
         if len(self._trajs) == 0:
-            raise FileNotFoundError(f"No trajectories found in '{dataset_path}'")
+             raise FileNotFoundError(f"No trajectories found in '{dataset_path}'")
+        self.transform = transform
 
         # Build flat index over (traj_idx, t0, L)
         self._index: List[Tuple[int, int, int]] = []
@@ -75,16 +72,16 @@ class ActionChunkingDataset(ArkDataset):
         flat: List[List[dict]] = []
         for item in raw:
             if isinstance(item, list) and len(item) > 0 and isinstance(item[0], dict):
-                # single trajectory in this file
+
                 flat.append(item)
             elif isinstance(item, list) and len(item) > 0 and isinstance(item[0], list):
-                # list of trajectories in this file
+
                 for traj in item:
                     if not (isinstance(traj, list) and (len(traj) == 0 or isinstance(traj[0], dict))):
                         raise ValueError("Invalid trajectory structure inside file.")
                     flat.append(traj)
             elif isinstance(item, list) and len(item) == 0:
-                # empty -> ignore
+
                 continue
             else:
                 raise ValueError("Each .pkl must contain a trajectory (list[dict]) or list of trajectories.")
@@ -124,7 +121,7 @@ class ActionChunkingDataset(ArkDataset):
             actions[k] = _to_action_tensor(row["action"])
             mask[k] = 1.0
 
-        # Mirror your original logic: use K (not valid_len-1) to choose next_state index, capped at L-1
+
         end_idx = min(t0 + K, L - 1)
         row_end = traj[end_idx]
         if "next_state" not in row_end:
@@ -154,9 +151,8 @@ class ActionChunkingDataset(ArkDataset):
         masks = torch.stack([b["action_mask"] for b in batch], dim=0)
         next_states = torch.stack([b["next_state"] for b in batch], dim=0)
 
-        # images remain a list (not stacked) → avoids memory blowup
-        images = [b["image"] for b in batch]
-        next_images = [b["next_image"] for b in batch]
+        images = torch.stack([b["image"] for b in batch])
+        next_images = torch.stack([b["next_image"] for b in batch])
         meta = [b["meta"] for b in batch]
 
         return {

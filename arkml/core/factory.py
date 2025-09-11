@@ -4,7 +4,7 @@ from typing import Any, Dict, Mapping, Tuple
 
 from omegaconf import DictConfig, OmegaConf
 
-from ark_ml.arkml.core.registry import MODELS
+from arkml.core.registry import MODELS
 
 
 def _to_plain_dict(cfg: DictConfig | Mapping[str, Any]) -> Dict[str, Any]:
@@ -65,7 +65,7 @@ def _filter_kwargs_for_constructor(cls: type, params: Dict[str, Any]) -> Tuple[
            and p.default is inspect._empty
            and p.name != "self"
     ]
-    breakpoint()
+
 
     accepted = {k: v for k, v in params.items() if k in accepted_names}
     ignored = {k: v for k, v in params.items() if k not in accepted_names}

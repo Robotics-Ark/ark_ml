@@ -3,7 +3,7 @@ from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.policies.pi0.modeling_pi0 import PI0Policy
 from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 
-from ark_ml.arkml.core.registry import MODELS
+from arkml.core.registry import MODELS
 
 
 @MODELS.register("PiZeroNet")

@@ -19,7 +19,7 @@ import math
 import torch
 import torch.nn as nn
 
-from ark_ml.arkml.core.registry import MODELS
+from arkml.core.registry import MODELS
 
 
 class SinusoidalPosEmb(nn.Module):

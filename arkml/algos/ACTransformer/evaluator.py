@@ -1,6 +1,8 @@
 import torch
-from arkml.arkml.core.algorithm import Evaluator
-from models import masked_l1, kl_loss
+
+from arkml.core.algorithm import Evaluator
+from arkml.algos.ACTransformer.models import masked_l1, kl_loss
+
 
 class ACTransformerEvaluator(Evaluator):
     def __init__(self, model, dataloader, device="cpu"):

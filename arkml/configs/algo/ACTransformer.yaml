@@ -1,9 +1,10 @@
-name: action_chunking_transformer
+name: actransformer
 model :
   type: ACTransformer
   name: ACTransformer
-  obs_dim: 10
+  joint_dim: 10
   action_dim: 8
+  checkpoint: ""
 
 
 trainer :

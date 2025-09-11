@@ -4,8 +4,8 @@ from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from torchvision import transforms
 
-from ark_ml.arkml.core.factory import build_model
-from ark_ml.arkml.core.registry import DATASETS, ALGOS
+from arkml.core.factory import build_model
+from arkml.core.registry import DATASETS, ALGOS
 
 
 @hydra.main(config_path="../configs", config_name="defaults.yaml", version_base="1.3")
@@ -20,11 +20,13 @@ def main(cfg: DictConfig):
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
+
     dataset = dataset_cls(
         dataset_path=cfg.data.dataset_path,
         transform=transform,
-        task_prompt=cfg.task_prompt,
+        # task_prompt=cfg.task_prompt, # TODO
     )
+
     dataloader = DataLoader(
         dataset,
         batch_size=cfg.algo.trainer.batch_size,
@@ -41,6 +43,7 @@ def main(cfg: DictConfig):
     # 2. Load algorithm
     algo_cls = ALGOS.get(cfg.algo.name)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     algo = algo_cls(policy=policy, dataloader=dataloader, device=device, cfg=cfg)
 
     # 3. Run training

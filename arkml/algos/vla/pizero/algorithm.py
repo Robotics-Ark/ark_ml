@@ -1,5 +1,5 @@
 import torch
-from ark_ml.arkml.core.registry import ALGOS
+from arkml.core.registry import ALGOS
 
 @ALGOS.register("pizero")
 class PiZeroAlgorithm:

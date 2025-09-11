@@ -23,6 +23,7 @@ class RobotNode:
           ``(obs, info)`` as returned by ``env.reset()``
         """
         obs, info = self.env.reset()
+
         self.obs_history = [obs] * self.obs_horizon  # bootstrap with repeated obs
         return obs, info
 
@@ -119,14 +120,14 @@ class RobotNode:
             actions = self.policy_node.predict(model_input)
 
             # Normalize to a sequence of actions [T, action_dim]
-            if actions is None:
-                raise RuntimeError("Policy returned None for actions.")
-            if actions.ndim == 1:
-                actions_seq = actions[None, :]
-            else:
-                actions_seq = actions[start_offset:start_offset + action_horizon]
+            # if actions is None:
+            #     raise RuntimeError("Policy returned None for actions.")
+            # if actions.ndim == 1:
+            #     actions_seq = actions[None, :]
+            # else:
+            #     actions_seq = actions[start_offset:start_offset + action_horizon]
 
-            for a in actions_seq:
+            for a in actions:
                 _, _, terminated, truncated, _ = self.step(a)
                 if step_sleep:
                     import time as _t

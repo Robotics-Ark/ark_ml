@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from ark_ml.arkml.core.registry import DATASETS, MODELS
+from arkml.core.registry import DATASETS, MODELS
 
 
 # from core.utils.registry import MODELS, DATASETS
