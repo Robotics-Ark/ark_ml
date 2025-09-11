@@ -95,7 +95,9 @@ def main(cfg: DictConfig) -> None:
 
 
 if __name__ == "__main__":
-    # Example overrides:
-    # python tools/rollout.py checkpoint=/path/to/weights.pth algo=diffusion data=diffusion_dataset \
-    #   algo.model.obs_horizon=8 algo.model.pred_horizon=16 algo.model.action_horizon=8
+    """
+    Rollout a policy:
+    HYDRA_FULL_ERROR=1 python -m ark_ml.arkml.tools.rollout algo=pizero \
+    algo.model_path=/path/to/model/checkpoint
+    """
     main()

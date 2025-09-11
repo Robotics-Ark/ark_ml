@@ -1,7 +1,7 @@
 import hydra
 import torch
 from omegaconf import DictConfig, OmegaConf
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 
 from ark_ml.arkml.core.factory import build_model
@@ -25,31 +25,58 @@ def main(cfg: DictConfig):
         transform=transform,
         task_prompt=cfg.task_prompt,
     )
-    dataloader = DataLoader(
+
+    # Train/val split (80/20)
+    total_len = len(dataset)
+    train_len = int(0.8 * total_len)
+    val_len = total_len - train_len
+    train_dataset, val_dataset = random_split(
         dataset,
+        [train_len, val_len],
+        generator=torch.Generator().manual_seed(42),
+    )
+
+    train_loader = DataLoader(
+        train_dataset,
         batch_size=cfg.algo.trainer.batch_size,
         shuffle=True,
         num_workers=cfg.algo.trainer.num_workers,
         pin_memory=True,
         persistent_workers=True,
     )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=cfg.algo.trainer.batch_size,
+        shuffle=False,
+        num_workers=cfg.algo.trainer.num_workers,
+        pin_memory=True,
+        persistent_workers=True,
+    )
+
+    print(f"Data split -> train: {train_len}, val: {val_len}")
 
     # Build model (policy)
     policy = build_model(cfg.algo)
 
-    # 2. Load algorithm
+    # Load algorithm
     algo_cls = ALGOS.get(cfg.algo.name)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    algo = algo_cls(policy=policy, dataloader=dataloader, device=device, cfg=cfg)
+    algo = algo_cls(policy=policy, device=device, cfg=cfg)
 
-    # 3. Run training
-    history = algo.train()
-    print("✅ Training finished. History:", history)
+    #  Run training
+    history = algo.train(dataloader=train_loader)
+    print("Training finished :", history)
+
+    # Run Evaluation
+    history = algo.eval(dataloader=val_loader)
+    print("Validation finished :", history)
 
 
 if __name__ == "__main__":
     """
-    # Train diffusion
-    python tools/train.py algo=diffusion data=diffusion_dataset
+    # Train a policy
+    HYDRA_FULL_ERROR=1 python -m ark_ml.arkml.tools.train algo=pizero \
+    data=pizero_dataset task_prompt="Pick the yellow cube and place it in the white background area of the table" \
+    data.dataset_path=/path/tp/data/set
     """
     main()

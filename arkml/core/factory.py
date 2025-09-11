@@ -40,7 +40,7 @@ def _normalize_model_cfg(model_cfg: DictConfig | Mapping[str, Any]) -> Tuple[str
     if "image_dim" in params and isinstance(params["image_dim"], str):
         params["image_dim"] = _normalise_shape(params["image_dim"])
 
-    if "enable_lora" in params and params["enable_lora"]:
+    if "enable_lora" in params:
         params.update(model_cfg["lora"])
 
     return str(model_name), params
@@ -65,7 +65,6 @@ def _filter_kwargs_for_constructor(cls: type, params: Dict[str, Any]) -> Tuple[
            and p.default is inspect._empty
            and p.name != "self"
     ]
-    breakpoint()
 
     accepted = {k: v for k, v in params.items() if k in accepted_names}
     ignored = {k: v for k, v in params.items() if k not in accepted_names}

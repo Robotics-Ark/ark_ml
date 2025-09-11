@@ -14,7 +14,7 @@ class PolicyNode(ABC):
 
     def __init__(self, policy: nn.Module, device: str):
         self.policy = policy
-        self.policy.load_mode_to_device(device=device)
+        self.policy.to_device(device=device)
         self.policy.set_eval_mode()
 
     def reset(self) -> None:

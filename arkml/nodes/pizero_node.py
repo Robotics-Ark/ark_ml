@@ -20,7 +20,7 @@ class PiZeroPolicyNode(PolicyNode):
             model_path=model_cfg.model_path,
             obs_dim=model_cfg.obs_dim,
             action_dim=model_cfg.action_dim,
-            image_dim=model_cfg.image_shape,
+            image_dim=model_cfg.image_dim,
         )
         super().__init__(policy=policy, device=device)
 
@@ -40,5 +40,5 @@ class PiZeroPolicyNode(PolicyNode):
         """
 
         with torch.no_grad():
-            action = self.policy.forward(obs_seq)
+            action = self.policy.predict(obs_seq)
         return action.detach().cpu().numpy()[0]

@@ -1,15 +1,11 @@
 from abc import ABC, abstractmethod
 
-from torch import nn
-
-from .types import Observation, Action
-
 
 class BasePolicy(ABC):
     """Minimal contract for all policies."""
 
     @abstractmethod
-    def predict(self, obs: ..., **kwargs) -> Action: # TODO check type
+    def predict(self, obs: ..., **kwargs) -> ...:
         raise NotImplementedError
 
     @abstractmethod
@@ -18,4 +14,10 @@ class BasePolicy(ABC):
 
     @abstractmethod
     def to_device(self, device: str):
+        raise NotImplementedError
+
+    def set_eval_mode(self):
+        raise NotImplementedError
+
+    def set_train_mode(self):
         raise NotImplementedError
