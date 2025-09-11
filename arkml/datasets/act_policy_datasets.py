@@ -29,21 +29,7 @@ def _to_action_tensor(action: Any) -> torch.Tensor:
 
 @DATASETS.register("act_dataset")
 class ActionChunkingDataset(ArkDataset):
-    """
-    Returns samples of the form:
-        - state: (10,)
-        - image: as-is (index 10 of state list)
-        - action_chunk: (K, 8)
-        - action_mask: (K,)
-        - next_state: (10,)
-        - next_image: as-is
 
-    Assumptions:
-      - Each *trajectory* is a list of dict rows with keys: 'state', 'action', 'next_state'.
-      - The dataset directory contains .pkl files. Each file may contain:
-          (a) a single trajectory (list[dict]), or
-          (b) a list of trajectories (list[list[dict]]).
-    """
 
     def __init__(self, dataset_path: str, transform, chunk_size: int = 8 ):
         super().__init__(dataset_path=dataset_path)
