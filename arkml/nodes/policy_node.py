@@ -1,4 +1,5 @@
 from abc import abstractmethod, ABC
+from typing import Any
 
 import numpy as np
 from torch import nn
@@ -14,8 +15,8 @@ class PolicyNode(ABC):
 
     def __init__(self, policy: nn.Module, device: str):
         self.policy = policy
-        self.policy.to(device=device)
-
+        self.policy.to_device(device=device)
+        self.policy.set_eval_mode()
 
     def reset(self) -> None:
         """Reset the internal state of the policy.
@@ -40,7 +41,7 @@ class PolicyNode(ABC):
         return self.predict(obs_seq)
 
     @abstractmethod
-    def predict(self, obs_seq: dict[str, ...]) -> np.ndarray:
+    def predict(self, obs_seq: dict[str, Any]) -> np.ndarray:
         """Compute the action(s) from observations.
 
         Args:

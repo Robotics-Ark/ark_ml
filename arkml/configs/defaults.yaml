@@ -1,13 +1,11 @@
 defaults:
-  - algo: actransformer
-  - data: act_dataset
- # - channels: sim_franka_cube # TODO
+  - algo: diffusion
+  - data: diffusion_dataset
 
 # general overrides
 seed: 42
 output_dir: ./outputs
-environment_name: "diffusion_env"
+checkpoint: None
 task_prompt: ""
-n_episodes: 1
+n_episodes: 10
 max_steps: 500
-sim_config: /Users/abhineetkumar/arkprojects/ark_diffusion_policies_on_franka/diffusion_policy/config/global_config.yaml #TODO

@@ -6,11 +6,14 @@ class Registry:
         def decorator(cls):
             self._registry[name] = cls
             return cls
+
         return decorator
 
     def get(self, name):
         if name not in self._registry:
-            raise ValueError(f"{name} not found in registry. Available: {list(self._registry.keys())}")
+            raise ValueError(
+                f"{name} not found in registry. Available: {list(self._registry.keys())}"
+            )
         return self._registry[name]
 
 

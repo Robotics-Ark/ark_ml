@@ -1,12 +1,10 @@
 from typing import Callable
 
 import torch
-from omegaconf import DictConfig
 from arkml.core.factory import build_model
-from arkml.nodes.act_node import ActPolicyNode
 from arkml.nodes.diffusion_node import DiffusionPolicyNode
-#from arkml.nodes.pizero_node import PiZeroPolicyNode
-from arkml.nodes.policy_node import PolicyNode
+from arkml.nodes.pizero_node import PiZeroPolicyNode
+from omegaconf import DictConfig
 
 # Global registry for policy node builders
 _POLICY_BUILDERS: dict[str, Callable[[DictConfig, torch.device], object]] = {}
@@ -109,8 +107,7 @@ def _build_pizero(cfg: DictConfig, device: torch.device):
     Returns:
       Configured PiZeroPolicyNode  instance.
     """
-    pass
-   # return PiZeroPolicyNode(model_cfg=cfg.algo.model, device=str(device))
+    return PiZeroPolicyNode(model_cfg=cfg.algo.model, device=str(device))
 
 
 @register_policy("smolvla")

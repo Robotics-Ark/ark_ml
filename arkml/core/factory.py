@@ -2,9 +2,8 @@ import ast
 import inspect
 from typing import Any, Dict, Mapping, Tuple
 
-from omegaconf import DictConfig, OmegaConf
-
 from arkml.core.registry import MODELS
+from omegaconf import DictConfig, OmegaConf
 
 
 def _to_plain_dict(cfg: DictConfig | Mapping[str, Any]) -> Dict[str, Any]:
@@ -24,7 +23,9 @@ def _normalise_shape(shape_dim: str):
         return shape_dim
 
 
-def _normalize_model_cfg(model_cfg: DictConfig | Mapping[str, Any]) -> Tuple[str, Dict[str, Any]]:
+def _normalize_model_cfg(
+    model_cfg: DictConfig | Mapping[str, Any],
+) -> Tuple[str, Dict[str, Any]]:
     d = _to_plain_dict(model_cfg["model"])
     model_name = d.get("name") or d.get("type")
     if not model_name:
@@ -40,19 +41,21 @@ def _normalize_model_cfg(model_cfg: DictConfig | Mapping[str, Any]) -> Tuple[str
     if "image_dim" in params and isinstance(params["image_dim"], str):
         params["image_dim"] = _normalise_shape(params["image_dim"])
 
-    if "enable_lora" in params and params["enable_lora"]:
+    if "enable_lora" in params:
         params.update(model_cfg["lora"])
 
     return str(model_name), params
 
 
-def _filter_kwargs_for_constructor(cls: type, params: Dict[str, Any]) -> Tuple[
-    Dict[str, Any], Dict[str, Any], list[str]]:
+def _filter_kwargs_for_constructor(
+    cls: type, params: Dict[str, Any]
+) -> Tuple[Dict[str, Any], Dict[str, Any], list[str]]:
     sig = inspect.signature(cls.__init__)
     accepted_names = {
         p.name
         for p in sig.parameters.values()
-        if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        if p.kind
+        in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
     }
     # Exclude "self"
     accepted_names.discard("self")
@@ -61,11 +64,11 @@ def _filter_kwargs_for_constructor(cls: type, params: Dict[str, Any]) -> Tuple[
     required = [
         p.name
         for p in sig.parameters.values()
-        if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
-           and p.default is inspect._empty
-           and p.name != "self"
+        if p.kind
+        in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        and p.default is inspect._empty
+        and p.name != "self"
     ]
-
 
     accepted = {k: v for k, v in params.items() if k in accepted_names}
     ignored = {k: v for k, v in params.items() if k not in accepted_names}
@@ -88,6 +91,8 @@ def build_model(model_cfg: DictConfig | Mapping[str, Any]):
 
     # Optional: log ignored extras (you can replace with logging)
     if ignored:
-        print(f"[build_model] Ignoring extra model args for {model_name}: {list(ignored.keys())}")
+        print(
+            f"[build_model] Ignoring extra model args for {model_name}: {list(ignored.keys())}"
+        )
 
     return model_cls(**filtered)

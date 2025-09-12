@@ -1,6 +1,5 @@
-import os
-import pickle
 from abc import ABC, abstractmethod
+from typing import Any
 
 from torch.utils.data import Dataset
 
@@ -13,49 +12,42 @@ class ArkDataset(Dataset, ABC):
     a directory of serialized files (e.g., .pkl files). Subclasses must implement
     the __getitem__ method to define how individual samples are returned.
     Attributes:
-        dataset_path (str): Path to the directory containing dataset files.
-        trajectories (List[Any]): List of loaded trajectory data.
+        dataset_path: Path to the directory containing dataset files.
     """
 
-    def __init__(self, dataset_path: str):
-        """
-        Args:
-            dataset_path (str): Path to the dataset directory containing trajectory files.
-        """
+    def __init__(self, dataset_path: str, *args, **kwargs):
         self.dataset_path: str = dataset_path
-        self.trajectories: list[...] = []
 
-    def _load_trajectories(self) -> None:
+    @abstractmethod
+    def _build_index_map(self) -> None:
+        """Build a lightweight index to enable lazy sample loading.
+
+        Scans the dataset storage (e.g., directories, shard files, LMDB/HDF5/ZIP)
+        and records, for each sample, only the minimal information required to
+        retrieve it later without loading payloads (e.g., file path, shard/key,
+        record index, byte offset/size, and optional metadata).
+        This index allows
+        `__len__` and `__getitem__` to be fast and memory‑efficient by deferring
+        actual I/O until access time.
+
+        Notes:
+            - Keep entries small (no tensors/arrays) to minimize RAM usage.
+            - Ensure deterministic ordering for reproducible splits.
         """
-        Loads all trajectories from the dataset directory into memory.
+        ...
 
-        This function assumes that the dataset directory contains files ending
-        with ".pkl", where each file is a pickled list of trajectories.
-
-        Raises:
-            FileNotFoundError: If the dataset path does not exist.
-        """
-        if not os.path.exists(self.dataset_path):
-            raise FileNotFoundError(f"Dataset path '{self.dataset_path}' does not exist.")
-
-        file_list = sorted(
-            [os.path.join(self.dataset_path, f) for f in os.listdir(self.dataset_path) if f.endswith(".pkl")]
-        )
-
-        for fpath in file_list:
-            with open(fpath, "rb") as f:
-                traj_list = pickle.load(f)
-                self.trajectories.append(traj_list)
-
+    @abstractmethod
     def __len__(self) -> int:
         """
+        Provides the length of the dataset.
+
         Returns:
             int: The number of trajectories loaded in the dataset.
         """
-        return len(self.trajectories)
+        ...
 
     @abstractmethod
-    def __getitem__(self, idx: int) -> dict[str, ...]:
+    def __getitem__(self, idx: int) -> Any:
         """
         Abstract method to fetch a single sample from the dataset.
 
@@ -69,4 +61,4 @@ class ArkDataset(Dataset, ABC):
             Dict[str, Any]: A dictionary representing the sample, which may
             include keys like 'state', 'image', 'action', etc.
         """
-        raise NotImplementedError
+        ...

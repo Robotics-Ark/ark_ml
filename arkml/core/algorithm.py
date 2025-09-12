@@ -1,8 +1,8 @@
 from abc import ABC, abstractmethod
-
-from torch.utils.data import DataLoader
+from typing import Any
 
 from arkml.core.policy import BasePolicy
+from torch.utils.data import DataLoader
 
 
 class Trainer(ABC):
@@ -14,7 +14,7 @@ class Trainer(ABC):
     """
 
     @abstractmethod
-    def fit(self, *args, **kwargs) -> dict[str, ...]:
+    def fit(self, *args, **kwargs) -> dict[str, Any]:
         """Run the training procedure and return summary metrics.
 
         Args:
@@ -26,7 +26,7 @@ class Trainer(ABC):
             accuracies, global step counts, and/or artifact locations.
 
         """
-        raise NotImplementedError
+        ...
 
 
 class Evaluator(ABC):
@@ -37,7 +37,7 @@ class Evaluator(ABC):
     """
 
     @abstractmethod
-    def evaluate(self, *args, **kwargs) -> dict[str, ...]:
+    def evaluate(self, *args, **kwargs) -> dict[str, Any]:
         """Compute evaluation metrics and return a summary.
 
         Args:
@@ -48,7 +48,7 @@ class Evaluator(ABC):
             A dictionary of evaluation results, such as average
             loss, accuracy, F1, or other task‑specific metrics.
         """
-        raise NotImplementedError
+        ...
 
 
 class BaseAlgorithm(ABC):
@@ -58,10 +58,12 @@ class BaseAlgorithm(ABC):
 
     def __init__(self):
         # Use registry name if present, otherwise fallback to class name
-        self.alg_name = getattr(self.__class__, "_registry_name", self.__class__.__name__)
+        self.alg_name = getattr(
+            self.__class__, "_registry_name", self.__class__.__name__
+        )
 
     @abstractmethod
-    def train(self, dataloader: DataLoader, *args, **kwargs) -> ...:
+    def train(self, dataloader: DataLoader, *args, **kwargs) -> Any:
         """Train the algorithm using the provided dataloader.
 
         Args:
@@ -74,10 +76,10 @@ class BaseAlgorithm(ABC):
             metrics dict, training history, or artifacts path).
         """
 
-        raise NotImplementedError
+        ...
 
     @abstractmethod
-    def eval(self, dataloader: DataLoader, *args, **kwargs) -> ...:
+    def eval(self, dataloader: DataLoader, *args, **kwargs) -> Any:
         """Evaluate the algorithm using the provided dataloader.
 
         Args:
@@ -89,4 +91,4 @@ class BaseAlgorithm(ABC):
             Any: Evaluation output as defined by the implementation (e.g.,
             metrics dict or evaluation report).
         """
-        raise NotImplementedError
+        ...

@@ -1,33 +1,63 @@
+"""Evaluation loop for the PiZero algorithm.
+
+Computes average validation loss across the provided dataloader by leveraging
+the model's forward method, which is expected to return either a loss tensor
+directly or a tuple whose first element is the loss.
+"""
+
+from typing import Any
+
 import torch
+from arkml.core.algorithm import Evaluator
+from arkml.core.policy import BasePolicy
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
-import torch.nn.functional as F
 
-class PiZeroTrainer:
+
+class PiZeroEvaluator(Evaluator):
+    """Evaluator for PiZero models.
+
+    Args:
+        model: Model compatible with the training setup to evaluate.
+        dataloader: Validation dataloader yielding batches.
+        device: Target device for evaluation.
     """
-    Trainer for Pi-Zero policy.
-    """
-    def __init__(self, model, optimizer, device="cpu"):
-        self.model = model.to(device)
-        self.optimizer = optimizer
-        self.device = device
 
+    def __init__(
+        self,
+        model: BasePolicy,
+        dataloader: DataLoader,
+        device: str,
+    ) -> None:
+        self.model = model.to_device(device)
+        self.dataloader = dataloader
+        self.model.set_eval_mode()
 
-    def fit(self, dataloader: DataLoader, epochs: int = 100):
-        self.model.train()
-        for epoch in range(epochs):
-            epoch_loss = 0
-            for batch in tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}"):
-                obs = batch["state"].float().to(self.device)
-                action_gt = batch["action"].float().to(self.device)
+    @torch.no_grad()
+    def evaluate(self) -> dict[str, Any]:
+        """Run evaluation over the validation dataloader.
 
-                pred_action = self.model(obs)
-                loss = F.mse_loss(pred_action, action_gt)
+        Returns:
+            A metrics dictionary with keys:
+                - ``val_loss``: Average loss over the validation set.
+                - ``batches``: Number of evaluated batches.
+        """
 
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
+        total_loss = 0.0
+        num_batches = 0
 
-                epoch_loss += loss.item()
-            avg_loss = epoch_loss / len(dataloader)
-            print(f"Epoch {epoch+1}, Loss: {avg_loss:.6f}")
+        progress_bar = tqdm(
+            enumerate(self.dataloader),
+            total=len(self.dataloader),
+            desc="Validation",
+            leave=False,
+        )
+
+        for _, batch in progress_bar:
+            out = self.model.forward(batch)
+            loss = out if torch.is_tensor(out) else out[0]
+            total_loss += float(loss.item())
+            num_batches += 1
+
+        avg_loss = total_loss / max(1, num_batches)
+        return {"val_loss": avg_loss, "batches": num_batches}
