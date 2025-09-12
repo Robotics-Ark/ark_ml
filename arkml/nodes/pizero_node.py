@@ -1,10 +1,12 @@
 import torch
 
-from ark_ml.arkml.algos.vla.pizero.models import PiZeroNet
-from ark_ml.arkml.nodes.policy_node import PolicyNode
+from arkml.algos.vla.pizero.models import PiZeroNet
+from arkml.nodes.policy_node import PolicyNode
+
+from ark_framework.ark.client.comm_infrastructure.base_node import BaseNode
 
 
-class PiZeroPolicyNode(PolicyNode):
+class PiZeroPolicyNode(BaseNode):
     """Wrapper node for PiZero/SmolVLA.
 
     Args:

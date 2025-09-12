@@ -1,12 +1,12 @@
 import os
 import pickle
+from typing import Any
 
 import torch
 from PIL import Image
+from arkml.core.dataset import ArkDataset
+from arkml.core.registry import DATASETS
 from torchvision import transforms
-
-from ark_ml.arkml.core.dataset import ArkDataset
-from ark_ml.arkml.core.registry import DATASETS
 
 
 @DATASETS.register("pizero_dataset")
@@ -45,10 +45,16 @@ class PiZeroDataset(ArkDataset):
     def _build_index_map(self) -> None:
         """Build an index map instead of loading all trajectories into memory."""
         if not os.path.exists(self.dataset_path):
-            raise FileNotFoundError(f"Dataset path '{self.dataset_path}' does not exist.")
+            raise FileNotFoundError(
+                f"Dataset path '{self.dataset_path}' does not exist."
+            )
 
         file_list = sorted(
-            [os.path.join(self.dataset_path, f) for f in os.listdir(self.dataset_path) if f.endswith(".pkl")]
+            [
+                os.path.join(self.dataset_path, f)
+                for f in os.listdir(self.dataset_path)
+                if f.endswith(".pkl")
+            ]
         )
 
         for fpath in file_list:
@@ -64,7 +70,7 @@ class PiZeroDataset(ArkDataset):
         """
         return len(self.index_map)
 
-    def __getitem__(self, idx) -> dict[str, ...]:
+    def __getitem__(self, idx) -> dict[str, Any]:
         """Load and return a single sample by dataset index.
 
         Uses the index map to find the corresponding (file, trajectory_idx),
@@ -92,14 +98,16 @@ class PiZeroDataset(ArkDataset):
             traj_list = pickle.load(f)
             trajectory = traj_list[traj_idx]
 
-        image = Image.fromarray(trajectory['state'][10])
+        image = Image.fromarray(trajectory["state"][10])
         image = self.transform(image)
 
         obs = {
             "image": image,
-            "state": torch.tensor(trajectory['state'][:10], dtype=torch.float),
-            "action": torch.tensor(trajectory['action'], dtype=torch.float).unsqueeze(0),
-            "task": self.task_prompt
+            "state": torch.tensor(trajectory["state"][:10], dtype=torch.float),
+            "action": torch.tensor(trajectory["action"], dtype=torch.float).unsqueeze(
+                0
+            ),
+            "task": self.task_prompt,
         }
 
         return obs

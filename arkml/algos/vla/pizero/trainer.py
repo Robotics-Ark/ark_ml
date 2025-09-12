@@ -1,13 +1,13 @@
 import os
 import shutil
 from datetime import datetime
+from typing import Any
 
 import torch
+from arkml.core.algorithm import Trainer
+from arkml.core.policy import BasePolicy
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-
-from ark_ml.arkml.core.algorithm import Trainer
-from ark_ml.arkml.core.policy import BasePolicy
 
 
 class PiZeroTrainer(Trainer):
@@ -40,17 +40,18 @@ class PiZeroTrainer(Trainer):
       scaler (torch.cuda.amp.GradScaler): GradScaler used when `use_bf16` is False.
       use_bf16 (bool): Whether bfloat16 autocast is enabled.
     """
+
     def __init__(
-            self,
-            model: BasePolicy,
-            dataloader: DataLoader,
-            device: str,
-            lr: float,
-            weight_decay: float,
-            num_epochs: int,
-            grad_accum: float,
-            output_dir: str,
-            use_bf16: bool,
+        self,
+        model: BasePolicy,
+        dataloader: DataLoader,
+        device: str,
+        lr: float,
+        weight_decay: float,
+        num_epochs: int,
+        grad_accum: float,
+        output_dir: str,
+        use_bf16: bool,
     ):
         self.model = model.to_device(device)  # PiZeroNet
         self.dataloader = dataloader
@@ -60,13 +61,15 @@ class PiZeroTrainer(Trainer):
         self.output_dir = output_dir
         self.trainable_params = self.model.get_trainable_params()
 
-        self.optimizer = torch.optim.AdamW(self.trainable_params, lr=lr, weight_decay=weight_decay)
+        self.optimizer = torch.optim.AdamW(
+            self.trainable_params, lr=lr, weight_decay=weight_decay
+        )
 
         # only needed for fp16
         self.scaler = torch.cuda.amp.GradScaler(enabled=not use_bf16)
         self.use_bf16 = use_bf16
 
-    def fit(self, *args, **kwargs) -> dict[str, ...]:
+    def fit(self, *args, **kwargs) -> dict[str, Any]:
         """Run the training loop and return summary metrics.
 
         Args:
@@ -138,12 +141,14 @@ class PiZeroTrainer(Trainer):
             print(f"[epoch {epoch + 1}] avg_loss={avg_loss:.6f}")
 
             # --- Checkpoint logic ---
-            if avg_loss < best_loss:
-                print(f"[epoch {epoch + 1}] New best loss {avg_loss:.6f} (prev {best_loss:.6f})")
+            if 1:  # avg_loss < best_loss:
+                print(
+                    f"[epoch {epoch + 1}] New best loss {avg_loss:.6f} (prev {best_loss:.6f})"
+                )
 
                 # remove old best checkpoint
                 if best_ckpt_path and os.path.exists(best_ckpt_path):
-                    shutil.rmtree(best_ckpt_path)
+                    # shutil.rmtree(best_ckpt_path)
                     print(f"[checkpoint] Removed old best checkpoint {best_ckpt_path}")
 
                 # save new best
@@ -152,4 +157,8 @@ class PiZeroTrainer(Trainer):
                 self.model.save_policy(best_ckpt_path)
                 print(f"[checkpoint] Saved new best checkpoint to {best_ckpt_path}")
 
-        return {"global_steps": global_step, "best_loss": best_loss, "best_ckpt": best_ckpt_path}
+        return {
+            "global_steps": global_step,
+            "best_loss": best_loss,
+            "best_ckpt": best_ckpt_path,
+        }

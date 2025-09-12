@@ -1,11 +1,10 @@
 import hydra
 import torch
+from arkml.core.factory import build_model
+from arkml.core.registry import DATASETS, ALGOS
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
-
-from ark_ml.arkml.core.factory import build_model
-from ark_ml.arkml.core.registry import DATASETS, ALGOS
 
 
 @hydra.main(config_path="../configs", config_name="defaults.yaml", version_base="1.3")
@@ -14,12 +13,14 @@ def main(cfg: DictConfig):
 
     # Load dataset with task information
     dataset_cls = DATASETS.get(cfg.data.name)
-    transform = transforms.Compose([
-        transforms.Resize((224, 224)),  # Resize
-        transforms.ColorJitter(0.2, 0.2, 0.2),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
+    transform = transforms.Compose(
+        [
+            transforms.Resize((224, 224)),  # Resize
+            transforms.ColorJitter(0.2, 0.2, 0.2),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+    )
     dataset = dataset_cls(
         dataset_path=cfg.data.dataset_path,
         transform=transform,

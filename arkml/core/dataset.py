@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from typing import Any
 
 from torch.utils.data import Dataset
 
@@ -15,7 +16,7 @@ class ArkDataset(Dataset, ABC):
         dataset_path: Path to the directory containing dataset files.
     """
 
-    def __init__(self, dataset_path: str,  *args, **kwargs):
+    def __init__(self, dataset_path: str, *args, **kwargs):
         self.dataset_path: str = dataset_path
 
     @abstractmethod
@@ -34,7 +35,7 @@ class ArkDataset(Dataset, ABC):
             - Keep entries small (no tensors/arrays) to minimize RAM usage.
             - Ensure deterministic ordering for reproducible splits.
         """
-        raise NotImplementedError
+        ...
 
     @abstractmethod
     def __len__(self) -> int:
@@ -44,10 +45,10 @@ class ArkDataset(Dataset, ABC):
         Returns:
             int: The number of trajectories loaded in the dataset.
         """
-        raise NotImplementedError
+        ...
 
     @abstractmethod
-    def __getitem__(self, idx: int) -> ...:
+    def __getitem__(self, idx: int) -> Any:
         """
         Abstract method to fetch a single sample from the dataset.
 
@@ -61,4 +62,4 @@ class ArkDataset(Dataset, ABC):
             Dict[str, Any]: A dictionary representing the sample, which may
             include keys like 'state', 'image', 'action', etc.
         """
-        raise NotImplementedError
+        ...

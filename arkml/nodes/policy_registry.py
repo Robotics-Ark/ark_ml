@@ -1,11 +1,10 @@
 from typing import Callable
 
 import torch
+from arkml.core.factory import build_model
+from arkml.nodes.diffusion_node import DiffusionPolicyNode
+from arkml.nodes.pizero_node import PiZeroPolicyNode
 from omegaconf import DictConfig
-from ark_ml.arkml.core.factory import build_model
-from ark_ml.arkml.nodes.diffusion_node import DiffusionPolicyNode
-from ark_ml.arkml.nodes.pizero_node import PiZeroPolicyNode
-from ark_ml.arkml.nodes.policy_node import PolicyNode
 
 # Global registry for policy node builders
 _POLICY_BUILDERS: dict[str, Callable[[DictConfig, torch.device], object]] = {}

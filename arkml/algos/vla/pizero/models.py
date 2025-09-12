@@ -1,14 +1,14 @@
 import os
+from typing import Any
 
 import torch.nn as nn
+from arkml.core.policy import BasePolicy
+from arkml.core.registry import MODELS
 from lerobot.configs.types import FeatureType, PolicyFeature, NormalizationMode
 from lerobot.policies.normalize import Normalize, Unnormalize
 from lerobot.policies.pi0.modeling_pi0 import PI0Policy
 from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 from torch import tensor
-
-from ark_ml.arkml.core.policy import BasePolicy
-from ark_ml.arkml.core.registry import MODELS
 
 
 @MODELS.register("PiZeroNet")
@@ -24,19 +24,17 @@ class PiZeroNet(BasePolicy, nn.Module):
     """
 
     def __init__(
-            self,
-            policy_type: str,
-            model_path: str,
-            obs_dim: int,
-            action_dim: int,
-            image_dim: tuple,
-
-            # LoRA config
-            enable_lora: bool = False,
-            lora_modules: list = None,
-
-            # Config
-            pred_horizon: int = 1
+        self,
+        policy_type: str,
+        model_path: str,
+        obs_dim: int,
+        action_dim: int,
+        image_dim: tuple,
+        # LoRA config
+        enable_lora: bool = False,
+        lora_modules: list = None,
+        # Config
+        pred_horizon: int = 1,
     ):
         super().__init__()
         self.obs_dim = obs_dim
@@ -55,57 +53,57 @@ class PiZeroNet(BasePolicy, nn.Module):
 
         kind = policy_type.lower()
         if kind not in {"pi0", "smolvla"}:
-            raise ValueError(f"Unsupported policy_type '{policy_type}'. Use 'pi0' or 'smolvla'.")
+            raise ValueError(
+                f"Unsupported policy_type '{policy_type}'. Use 'pi0' or 'smolvla'."
+            )
 
         policy_class = PI0Policy if kind == "pi0" else SmolVLAPolicy
 
         try:
             self._policy = policy_class.from_pretrained(model_path)
         except Exception as e:
-            raise RuntimeError(f"Failed to load pretrained {kind} policy '{model_path}': {e}")
+            raise RuntimeError(
+                f"Failed to load pretrained {kind} policy '{model_path}': {e}"
+            )
 
         # TODO need to investigate the policy config
-        self._policy.config.norm_map = {
-            FeatureType.STATE: NormalizationMode.IDENTITY,
-            FeatureType.VISUAL: NormalizationMode.IDENTITY,
-            FeatureType.ACTION: NormalizationMode.IDENTITY,
-        }
+        # self._policy.config.norm_map = {
+        #     FeatureType.STATE: NormalizationMode.IDENTITY,
+        #     FeatureType.VISUAL: NormalizationMode.IDENTITY,
+        #     FeatureType.ACTION: NormalizationMode.IDENTITY,
+        # }
 
         self._policy.config.input_features = {
             "observation.images.image": PolicyFeature(
-                type=FeatureType.VISUAL,
-                shape=self.image_dim
+                type=FeatureType.VISUAL, shape=self.image_dim
             ),
             "observation.state": PolicyFeature(
-                type=FeatureType.STATE,
-                shape=(self.obs_dim,)
+                type=FeatureType.STATE, shape=(self.obs_dim,)
             ),
         }
         self._policy.config.output_features = {
-            "action": PolicyFeature(
-                type=FeatureType.ACTION,
-                shape=(self.action_dim,)
-            ),
+            "action": PolicyFeature(type=FeatureType.ACTION, shape=(self.action_dim,)),
         }
 
-        self._policy.normalize_inputs = Normalize(
-            self._policy.config.input_features,
-            self._policy.config.norm_map,
-        )
-
-        self._policy.unnormalize_outputs = Unnormalize(
-            self._policy.config.output_features,
-            self._policy.config.norm_map,
-        )
+        # self._policy.normalize_inputs = Normalize(
+        #     self._policy.config.input_features,
+        #     self._policy.config.norm_map,
+        # )
+        #
+        # self._policy.unnormalize_outputs = Unnormalize(
+        #     self._policy.config.output_features,
+        #     self._policy.config.norm_map,
+        # )
 
         if self.is_lora_enabled:
             raise NotImplementedError("Lora policies not implemented yet to VLA.")
         else:
-            for p in self._policy.parameters(): p.requires_grad = True
+            for p in self._policy.parameters():
+                p.requires_grad = True
 
         self._policy.config.n_action_steps = pred_horizon
 
-    def to_device(self, device: str) -> ...:
+    def to_device(self, device: str) -> Any:
         """
         Move the underlying policy to a device and return self.
         Args:
@@ -137,7 +135,7 @@ class PiZeroNet(BasePolicy, nn.Module):
         """
         self._policy.reset()
 
-    def prepare_input(self, observation: dict) -> dict[str, ...]:
+    def prepare_input(self, observation: dict) -> dict[str, Any]:
         """
         Convert an observation dict into the policy’s expected input format.
         Moves tensors to `self.device` and maps keys to the feature schema
@@ -168,7 +166,7 @@ class PiZeroNet(BasePolicy, nn.Module):
             obs["action"] = observation["action"].to(self.device)
         return obs
 
-    def predict(self, obs: dict[str, ...], **kwargs) -> tensor:
+    def predict(self, obs: dict[str, Any], **kwargs) -> tensor:
         """
         Select an action for a single observation.
         Args:
@@ -211,9 +209,7 @@ class PiZeroNet(BasePolicy, nn.Module):
             Scalar loss tensor for the batch.
         """
         batch = self.prepare_input(observation=observation)
-        loss, _ = self._policy.forward(
-            batch
-        )
+        loss, _ = self._policy.forward(batch)
 
         return loss
 

@@ -1,8 +1,8 @@
-from typing import Dict
+from typing import Any
 
+import numpy as np
 from ark.env.ark_env import ArkEnv
 from arktypes.utils import pack, unpack
-import numpy as np
 from omegaconf import DictConfig
 
 
@@ -18,12 +18,13 @@ class RobotEnv(ArkEnv):
     """
 
     def __init__(
-            self, config: DictConfig,
-            environment_name: str,
-            action_channels: dict[str, type],
-            observation_channels: dict[str, type],
-            max_steps:int,
-            sim=True
+        self,
+        config: str,
+        environment_name: str,
+        action_channels: dict[str, type],
+        observation_channels: dict[str, type],
+        max_steps: int,
+        sim=True,
     ):
         super().__init__(
             environment_name=environment_name,
@@ -37,7 +38,7 @@ class RobotEnv(ArkEnv):
         self.steps = 0
 
     @staticmethod
-    def action_packing(action: list) -> dict[str, ...]:
+    def action_packing(action: list) -> dict[str, Any]:
         """Pack action into ARK cartesian command message.
 
         Expects an 8D vector representing end-effector position, orientation
@@ -92,14 +93,16 @@ class RobotEnv(ArkEnv):
         franka_ee_position, franka_ee_orientation = unpack.pose(ee_state)
         rgb, depth = unpack.rgbd(images)
 
-        gripper_position = franka_joint_position[-2]  # Assuming last two joints are gripper
+        gripper_position = franka_joint_position[
+            -2
+        ]  # Assuming last two joints are gripper
 
         return {
             "cube": cube_position,
             "target": target_position,
             "gripper": [gripper_position],
             "franka_ee": (franka_ee_position, franka_ee_orientation),
-            "images": (rgb, depth)
+            "images": (rgb, depth),
         }
 
     def reset_objects(self):

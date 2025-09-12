@@ -6,8 +6,6 @@ defaults:
 seed: 42
 output_dir: ./outputs
 checkpoint: None
-environment_name: "diffusion_env"
 task_prompt: ""
-n_episodes: 3
+n_episodes: 10
 max_steps: 500
-sim_config: ./sim_config/global_config.yaml #TODO

@@ -1,4 +1,5 @@
 from abc import abstractmethod, ABC
+from typing import Any
 
 import numpy as np
 from torch import nn
@@ -26,7 +27,7 @@ class PolicyNode(ABC):
 
         self.policy.reset()
 
-    def infer(self, obs_seq: dict[str, ...]) -> np.ndarray:
+    def infer(self, obs_seq: dict[str, Any]) -> np.ndarray:
         """Backward-compatible alias for ``predict``.
 
         Args:
@@ -40,7 +41,7 @@ class PolicyNode(ABC):
         return self.predict(obs_seq)
 
     @abstractmethod
-    def predict(self, obs_seq: dict[str, ...]) -> np.ndarray:
+    def predict(self, obs_seq: dict[str, Any]) -> np.ndarray:
         """Compute the action(s) from observations.
 
         Args:
