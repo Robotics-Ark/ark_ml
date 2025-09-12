@@ -4,7 +4,7 @@ model :
   name: ACTransformer
   joint_dim: 10
   action_dim: 8
-  checkpoint: ""
+  checkpoint: "/Users/abhineetkumar/arkprojects/act-training/best1.pt"
 
 
 trainer :

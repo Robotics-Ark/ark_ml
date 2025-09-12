@@ -32,7 +32,7 @@ class TemporalEnsembler:
         return smoothed[:stride]
 
 class ActPolicyNode(PolicyNode):
-    def __init__(self, model_cfg, device="cpu", chunk_size=50, action_stride=1, image_size=256):
+    def __init__(self, model_cfg, device="mps", chunk_size=50, action_stride=1, image_size=256):
         """
         Returns `actions_to_exec` from predict()
         """

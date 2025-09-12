@@ -66,7 +66,7 @@ class ACT(nn.Module):
     def __init__(self, joint_dim=10, action_dim=8, z_dim=32,
                  d_model=512, ffn_dim=3200, nhead=8,
                  enc_layers=4, dec_layers=7, dropout=0.1,
-                 max_len=256, img_channels=3, pretrained_resnet=True):
+                 max_len=256, pretrained_resnet=True):
         super().__init__()
         self.d_model = d_model
         self.z_dim = z_dim

@@ -4,11 +4,21 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="29692605-778d-4c71-b9f0-4eb8a6657821" name="Changes" comment="[UPDATE] Added ACT">
-      <change beforePath="$PROJECT_DIR$/arkml/algos/ACTransformer/algorithm.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/algos/ACTransformer/algorithm.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/arkml/algos/ACTransformer/trainer.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/algos/ACTransformer/trainer.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/arkml/core/dataset.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/core/dataset.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/arkml/tools/train.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/tools/train.py" afterDir="false" />
+    <list default="true" id="29692605-778d-4c71-b9f0-4eb8a6657821" name="Changes" comment="[UPDATE] cleaned Action chunking dataset">
+      <change afterPath="$PROJECT_DIR$/arkml/configs/data/pizero_dataset.yaml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trajectories/trajectory_000.pkl" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trajectories/trajectory_001.pkl" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trajectories/trajectory_002.pkl" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trajectories/trajectory_003.pkl" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trajectories/trajectory_004.pkl" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trajectories/trajectory_005.pkl" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trajectories/trajectory_006.pkl" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/algos/ACTransformer/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/algos/ACTransformer/models.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/configs/algo/ACTransformer.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/configs/algo/ACTransformer.yaml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/configs/algo/pizero.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/configs/algo/pizero.yaml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/core/algorithm.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/core/algorithm.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/nodes/act_node.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/nodes/act_node.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -54,8 +64,8 @@
   &quot;keyToString&quot;: {
     &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;act&quot;,
-    &quot;last_opened_file_path&quot;: &quot;/Users/abhineetkumar/actml/ark_ml&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;dev-akumar-act&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/Users/abhineetkumar/actml/ark_ml/trajectories&quot;,
     &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
     &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
     &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
@@ -64,6 +74,11 @@
     &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
 }</component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/trajectories" />
+    </key>
+  </component>
   <component name="RunManager">
     <configuration name="main" type="PythonConfigurationType" factoryName="Python" nameIsGenerated="true">
       <module name="ark_ml" />
@@ -104,7 +119,7 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1757372463096</updated>
-      <workItem from="1757372464127" duration="42433000" />
+      <workItem from="1757372464127" duration="82829000" />
     </task>
     <task id="LOCAL-00001" summary="[UPDATE] Added ACT">
       <option name="closed" value="true" />
@@ -114,22 +129,78 @@
       <option name="project" value="LOCAL" />
       <updated>1757500974490</updated>
     </task>
-    <option name="localTasksCounter" value="2" />
+    <task id="LOCAL-00002" summary="[UPDATE] Added ACT">
+      <option name="closed" value="true" />
+      <created>1757525038324</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1757525038324</updated>
+    </task>
+    <task id="LOCAL-00003" summary="[UPDATE] Added ACT">
+      <option name="closed" value="true" />
+      <created>1757525048074</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1757525048074</updated>
+    </task>
+    <task id="LOCAL-00004" summary="[UPDATE] Added ACT">
+      <option name="closed" value="true" />
+      <created>1757601204751</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1757601204751</updated>
+    </task>
+    <task id="LOCAL-00005" summary="[UPDATE] cleaned Action chunking dataset">
+      <option name="closed" value="true" />
+      <created>1757601475310</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1757601475311</updated>
+    </task>
+    <option name="localTasksCounter" value="6" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
     <option name="version" value="3" />
   </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State>
+              <option name="FILTERS">
+                <map>
+                  <entry key="branch">
+                    <value>
+                      <list>
+                        <option value="origin/dev_refi_vla_pizero" />
+                      </list>
+                    </value>
+                  </entry>
+                </map>
+              </option>
+            </State>
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="[UPDATE] Added ACT" />
-    <option name="LAST_COMMIT_MESSAGE" value="[UPDATE] Added ACT" />
+    <MESSAGE value="[UPDATE] cleaned Action chunking dataset" />
+    <option name="LAST_COMMIT_MESSAGE" value="[UPDATE] cleaned Action chunking dataset" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
       <breakpoints>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/arkml/nodes/policy_registry.py</url>
-          <line>99</line>
+          <line>100</line>
           <option name="timeStamp" value="2" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">

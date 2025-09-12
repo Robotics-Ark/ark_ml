@@ -7,12 +7,32 @@ model:
   obs_dim: 10
   action_dim: 8         # Action dimension
   obs_horizon: 1        # Observation dimension
-  pred_horizon: 16
+  pred_horizon: 1
   action_horizon: 1
-  image_shape: (3, 480, 640) # Image dimension (b,c,h,w)
+  image_dim: (3, 480, 640) # Image dimension (b,c,h,w)
+  enable_lora: false
+
 
 trainer:
-  lr: 0.001
-  batch_size: 256
-  max_epochs: 1000
-  num_workers: 4
+  lr: 2e-4
+  batch_size: 16
+  max_epochs: 1
+  num_workers: 1
+  use_bf16: true
+
+lora:
+  lora_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "fc1"
+    - "fc2"
+    - "up_proj"
+    - "down_proj"
+    - "gate_proj"
+  lr: 2e-4
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+
