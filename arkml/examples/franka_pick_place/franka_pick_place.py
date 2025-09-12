@@ -195,7 +195,7 @@ def main(cfg: DictConfig) -> None:
     Args:
       cfg: Hydra configuration composed of ``defaults.yaml`` and overrides.
         Expected keys include:
-        - sim_config (str): Path to the ARK global sim config.
+        - sim_config (str): Path to the Ark global sim config.
         - environment_name (str): Environment identifier.
         - algo (DictConfig): Algorithm group with ``name`` and ``model``.
         - n_episodes (int): Number of episodes to evaluate.

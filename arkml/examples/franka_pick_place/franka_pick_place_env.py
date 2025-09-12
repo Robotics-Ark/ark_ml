@@ -7,11 +7,11 @@ from omegaconf import DictConfig
 
 
 class RobotEnv(ArkEnv):
-    """ARK environment wrapper customized for Franka + cube simulation.
+    """Ark environment wrapper customized for Franka + cube simulation.
 
     Args:
-      config: Global ARK configuration object.
-      environment_name: Name/identifier of the ARK environment to load.
+      config: Global Ark configuration object.
+      environment_name: Name/identifier of the Ark environment to load.
       action_channels: Mapping of action channels.
       observation_channels: Mapping of observation channels names.
       sim: Whether to run in simulation mode.
@@ -39,7 +39,7 @@ class RobotEnv(ArkEnv):
 
     @staticmethod
     def action_packing(action: list) -> dict[str, Any]:
-        """Pack action into ARK cartesian command message.
+        """Pack action into Ark cartesian command message.
 
         Expects an 8D vector representing end-effector position, orientation
         quaternion, and gripper command in the following order:
@@ -49,7 +49,7 @@ class RobotEnv(ArkEnv):
           action: List describing the cartesian command.
 
         Returns:
-          dict[str, ...]: Mapping with key pointing to a packed ARK message.
+          dict[str, ...]: Mapping with key pointing to a packed Ark message.
         """
 
         xyz_command = np.array(action[:3])
@@ -63,7 +63,7 @@ class RobotEnv(ArkEnv):
 
     @staticmethod
     def observation_unpacking(observation_dict):
-        """Unpack raw ARK observations into structured components.
+        """Unpack raw Ark observations into structured components.
 
         Converts incoming channel messages into a dictionary with primitive
         types useful for policies.
@@ -76,7 +76,7 @@ class RobotEnv(ArkEnv):
           - ``images``: tuple(rgb, depth) from the RGBD sensor
 
         Args:
-          observation_dict: Mapping from channel name to serialized ARK message.
+          observation_dict: Mapping from channel name to serialized Ark message.
 
         Returns:
           dict: Structured observation dictionary as described above.
