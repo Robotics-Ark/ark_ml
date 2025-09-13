@@ -4,8 +4,12 @@ from typing import Any
 import numpy as np
 from torch import nn
 
+from ark_framework.ark.client.comm_infrastructure.base_node import BaseNode
 
-class PolicyNode(ABC):
+# from ark.client.comm_infrastructure.base_node import BaseNode
+
+
+class PolicyNode(ABC, BaseNode):
     """Abstract base class for policy wrappers.
 
     Args:
@@ -13,7 +17,12 @@ class PolicyNode(ABC):
       device: Target device identifier (e.g., ``"cpu"``, ``"cuda"``).
     """
 
-    def __init__(self, policy: nn.Module, device: str):
+    def __init__(self, policy: nn.Module, device: str, channel_type, message_type, global_config=None):
+        super().__init__("Policy", global_config)
+        self.pub = self.create_publisher("next_action", message_type)
+        self.create_stepper(5, self.step)
+        self.create_subscriber("observation", channel_type, self.callback)
+        self.curr_observation = None
         self.policy = policy
         self.policy.to_device(device=device)
         self.policy.set_eval_mode()
@@ -53,3 +62,9 @@ class PolicyNode(ABC):
         """
 
         pass
+
+    @abstractmethod
+    def step(self): ...
+
+    def callback(self, t, channel_name, msg):
+        self.curr_observation = msg
