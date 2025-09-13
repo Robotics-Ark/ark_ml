@@ -5,11 +5,9 @@ from typing import Any
 import torch
 from PIL import Image
 from arkml.core.dataset import ArkDataset
-from arkml.core.registry import DATASETS
 from torchvision import transforms
 
 
-@DATASETS.register("pizero_dataset")
 class PiZeroDataset(ArkDataset):
     """
     Lazy-loading dataset for PiZero trajectories stored as pickled files.

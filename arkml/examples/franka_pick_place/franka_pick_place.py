@@ -59,10 +59,8 @@ class RobotNode(InstanceNode):
         self.truncated = None
         self.terminated = None
         self.next_command = None
-        self.obs_pub = self.create_publisher("observation", string_t)
-        self.cme_sub = self.create_subscriber(
-            "next_action", task_space_command_t, self.callback
-        )
+        self.create_publisher("observation", string_t)
+        self.create_subscriber("next_action", task_space_command_t, self.callback)
         self.create_stepper(10, self.step)
 
     def reset(self):
