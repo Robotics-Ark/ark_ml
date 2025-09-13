@@ -183,7 +183,7 @@ class ActPolicyNode(PolicyNode):
 
         memory = self.policy.build_memory(img_t, j_t, z_zero)          # (1, N_ctx, d)
         pred   = self.policy.decode_actions(memory, K)                 # (1,K,action_dim)
-        return pred.squeeze(0)                         # (K,action_dim)
+        return pred.squeeze(0).cpu().numpy()                          # (K,action_dim)
 
     @torch.no_grad()
     def predict(self, obs):
@@ -204,7 +204,7 @@ class ActPolicyNode(PolicyNode):
                 new_chunk=chunk_pred,
                 stride=self.action_stride
             )
-            return actions_to_exec.detach().cpu().numpy()
+            return actions_to_exec
 
     # TODO implement
     def publish_action(self, action):
