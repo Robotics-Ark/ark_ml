@@ -5,7 +5,7 @@ import torch.nn as nn
 from arkml.core.policy import BasePolicy
 from arkml.core.registry import MODELS
 from lerobot.configs.types import FeatureType, PolicyFeature, NormalizationMode
-# from lerobot.policies.normalize import Normalize, Unnormalize
+from lerobot.policies.normalize import Normalize, Unnormalize
 from lerobot.policies.pi0.modeling_pi0 import PI0Policy
 from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 from torch import tensor
@@ -87,15 +87,15 @@ class PiZeroNet(BasePolicy, nn.Module):
             "action": PolicyFeature(type=FeatureType.ACTION, shape=(self.action_dim,)),
         }
 
-        # self._policy.normalize_inputs = Normalize(
-        #     self._policy.config.input_features,
-        #     self._policy.config.norm_map,
-        # )
-        #
-        # self._policy.unnormalize_outputs = Unnormalize(
-        #     self._policy.config.output_features,
-        #     self._policy.config.norm_map,
-        # )
+        self._policy.normalize_inputs = Normalize(
+            self._policy.config.input_features,
+            self._policy.config.norm_map,
+        )
+
+        self._policy.unnormalize_outputs = Unnormalize(
+            self._policy.config.output_features,
+            self._policy.config.norm_map,
+        )
 
         if self.is_lora_enabled:
             raise NotImplementedError("Lora policies not implemented yet to VLA.")
