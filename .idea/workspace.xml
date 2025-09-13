@@ -5,20 +5,17 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="29692605-778d-4c71-b9f0-4eb8a6657821" name="Changes" comment="[UPDATE] cleaned Action chunking dataset">
-      <change afterPath="$PROJECT_DIR$/arkml/configs/data/pizero_dataset.yaml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/trajectories/trajectory_000.pkl" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/trajectories/trajectory_001.pkl" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/trajectories/trajectory_002.pkl" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/trajectories/trajectory_003.pkl" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/trajectories/trajectory_004.pkl" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/trajectories/trajectory_005.pkl" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/trajectories/trajectory_006.pkl" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/arkml/algos/__init__.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/arkml/algos/ACTransformer/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/algos/ACTransformer/models.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/algos/ACTransformer/algorithm.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/algos/ACTransformer/algorithm.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/algos/ACTransformer/evaluator.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/algos/ACTransformer/evaluator.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/arkml/configs/algo/ACTransformer.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/configs/algo/ACTransformer.yaml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/arkml/configs/algo/pizero.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/configs/algo/pizero.yaml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/arkml/core/algorithm.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/core/algorithm.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/arkml/nodes/act_node.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/nodes/act_node.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/configs/data/act_dataset.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/configs/data/act_dataset.yaml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/core/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/core/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/datasets/act_policy_datasets.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/algos/ACTransformer/act_policy_datasets.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/nodes/act_node.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/tools/rollout.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/tools/train.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/tools/train.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -35,7 +32,7 @@
   <component name="Git.Settings">
     <option name="RECENT_BRANCH_BY_REPOSITORY">
       <map>
-        <entry key="$PROJECT_DIR$" value="main" />
+        <entry key="$PROJECT_DIR$" value="dev_refi_vla_pizero" />
       </map>
     </option>
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
@@ -78,6 +75,9 @@
     <key name="CopyFile.RECENT_KEYS">
       <recent name="$PROJECT_DIR$/trajectories" />
     </key>
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/arkml/algos/ACTransformer" />
+    </key>
   </component>
   <component name="RunManager">
     <configuration name="main" type="PythonConfigurationType" factoryName="Python" nameIsGenerated="true">
@@ -119,7 +119,7 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1757372463096</updated>
-      <workItem from="1757372464127" duration="82829000" />
+      <workItem from="1757372464127" duration="89603000" />
     </task>
     <task id="LOCAL-00001" summary="[UPDATE] Added ACT">
       <option name="closed" value="true" />
@@ -161,7 +161,15 @@
       <option name="project" value="LOCAL" />
       <updated>1757601475311</updated>
     </task>
-    <option name="localTasksCounter" value="6" />
+    <task id="LOCAL-00006" summary="[UPDATE] cleaned Action chunking dataset">
+      <option name="closed" value="true" />
+      <created>1757716701885</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1757716701885</updated>
+    </task>
+    <option name="localTasksCounter" value="7" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -194,21 +202,5 @@
     <MESSAGE value="[UPDATE] Added ACT" />
     <MESSAGE value="[UPDATE] cleaned Action chunking dataset" />
     <option name="LAST_COMMIT_MESSAGE" value="[UPDATE] cleaned Action chunking dataset" />
-  </component>
-  <component name="XDebuggerManager">
-    <breakpoint-manager>
-      <breakpoints>
-        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/arkml/nodes/policy_registry.py</url>
-          <line>100</line>
-          <option name="timeStamp" value="2" />
-        </line-breakpoint>
-        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/arkml/nodes/pizero_node.py</url>
-          <line>24</line>
-          <option name="timeStamp" value="3" />
-        </line-breakpoint>
-      </breakpoints>
-    </breakpoint-manager>
   </component>
 </project>

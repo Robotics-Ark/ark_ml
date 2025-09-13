@@ -1,4 +1,4 @@
-name: actransformer
+name: action_chunking_transformer
 model :
   type: ACTransformer
   name: ACTransformer

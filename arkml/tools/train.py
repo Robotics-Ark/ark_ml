@@ -13,6 +13,7 @@ def main(cfg: DictConfig):
 
     # Load dataset with task information
     dataset_cls = DATASETS.get(cfg.data.name)
+
     transform = transforms.Compose(
         [
             transforms.Resize((224, 224)),  # Resize
@@ -44,7 +45,6 @@ def main(cfg: DictConfig):
         num_workers=cfg.algo.trainer.num_workers,
         pin_memory=True,
         persistent_workers=True,
-        collate_fn=dataset.collate_fn,
     )
     val_loader = DataLoader(
         val_dataset,
@@ -77,7 +77,7 @@ def main(cfg: DictConfig):
 if __name__ == "__main__":
     """
     # Train a policy
-    HYDRA_FULL_ERROR=1 python -m ark_ml.arkml.tools.train algo=pizero \
+    HYDRA_FULL_ERROR=1 python -m arkml.tools.train algo=pizero \
     data=pizero_dataset task_prompt="Pick the yellow cube and place it in the white background area of the table" \
     data.dataset_path=/path/tp/data/set
     """

@@ -11,11 +11,11 @@ class ACTransformerEvaluator(Evaluator):
         self.device = device
         self.model.eval()
 
-    def evaluate(self, dataloader):
+    def evaluate(self):
         total_loss = 0.0
         n = 0
         with torch.no_grad():
-            for batch in dataloader:
+            for batch in self.dataloader:
                 state = batch["state"].to(self.device)
                 image = batch["image"].to(self.device)
                 target = batch["action_chunk"].to(self.device)
