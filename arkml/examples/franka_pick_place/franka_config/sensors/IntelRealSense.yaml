@@ -22,7 +22,7 @@ config:
     near_val: 0.1                              # default 0.1
     far_val: 100.0                             # default 100.0
     fix:
-      camera_target_position: [0, 0, 0]
+      camera_target_position: [ 0, 0, 0 ]
       distance: 2.2
       yaw: 90
       pitch: -10

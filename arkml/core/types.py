@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, Tuple
+
 import numpy as np
 
 Array = np.ndarray

@@ -1,7 +1,8 @@
 # Import necessary modules
+from pathlib import Path
+
 from ark.client.comm_infrastructure.base_node import main
 from ark.system.simulation.simulator_node import SimulatorNode
-from pathlib import Path
 
 # Path to your configuration file
 

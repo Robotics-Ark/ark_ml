@@ -4,7 +4,7 @@ simulator:
   node_frequency: 240                     # How often your node's step() function runs (Hz)
   config:
     connection_mode: "GUI"                # GUI for visual interface, DIRECT for headless mode
-    gravity:                              # Gravity vector [x, y, z] in m/s²
+    gravity: # Gravity vector [x, y, z] in m/s²
       - 0
       - 0
       - -9.81                             # Standard Earth gravity
@@ -15,7 +15,7 @@ objects:
   - "objects/block.yaml"
   - "objects/target.yaml"
 
-robots: 
+robots:
   - "robots/franka.yaml"
 
 sensors:

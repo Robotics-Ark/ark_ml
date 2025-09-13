@@ -14,7 +14,7 @@ config:
     - 0
     - 1
   use_fixed_base: true
-  initial_configuration: 
+  initial_configuration:
     - 0.0
     - -0.785398
     - 0.0
@@ -26,10 +26,10 @@ config:
     - 0.0
     - 0.0
   ee_index: 6
-  joint_groups: 
-    arm: 
+  joint_groups:
+    arm:
       control_mode: "position"
-      joints: 
+      joints:
         - "panda_joint1"
         - "panda_joint2"
         - "panda_joint3"
@@ -37,13 +37,13 @@ config:
         - "panda_joint5"
         - "panda_joint6"
         - "panda_joint7"
-    gripper: 
+    gripper:
       control_mode: "velocity"
-      joints: 
+      joints:
         - "panda_finger_joint1"
-    all: 
+    all:
       control_mode: "position"
-      joints: 
+      joints:
         - "panda_joint1"
         - "panda_joint2"
         - "panda_joint3"
@@ -54,7 +54,7 @@ config:
         - "panda_finger_joint1"
 
 
-  real_config: 
+  real_config:
     robot_ip: "172.16.0.2"
     gripper_ip: "172.16.0.2"
     relative_dynamics_factor: 0.3

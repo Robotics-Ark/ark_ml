@@ -2,8 +2,9 @@ import ast
 import inspect
 from typing import Any, Dict, Mapping, Tuple
 
-from arkml.core.registry import MODELS
 from omegaconf import DictConfig, OmegaConf
+
+from arkml.core.registry import MODELS
 
 
 def _to_plain_dict(cfg: DictConfig | Mapping[str, Any]) -> Dict[str, Any]:

@@ -1,34 +1,35 @@
-
 import os
+from contextlib import nullcontext
+
 import torch
 from tqdm import tqdm
-from arkml.algos.ACTransformer.models import masked_l1, kl_loss
-from contextlib import nullcontext
-from arkml.core.algorithm import Trainer
-from arkml.core.registry import DATASETS, MODELS
 
+from arkml.algos.ACTransformer.models import masked_l1, kl_loss
+from arkml.core.algorithm import Trainer
 
 
 class ACTransformerTrainer(Trainer):
-    def __init__(self, model,dataloader,
-    epochs: int = 1,
-    lr: float = 1e-5,
-    weight_decay: float = 0.0,
-    grad_clip: float = 1.0,
-    beta: float = 10.0,
-    device="cuda"):
+    def __init__(
+        self,
+        model,
+        dataloader,
+        epochs: int = 1,
+        lr: float = 1e-5,
+        weight_decay: float = 0.0,
+        grad_clip: float = 1.0,
+        beta: float = 10.0,
+        device="cuda",
+    ):
         self.device = device
         self.epochs = epochs
         self.beta = beta
-    
+
         self.dataloader = dataloader
 
         self.model = model.to(self.device)
 
         self.optimizer = torch.optim.Adam(
-            self.model.parameters(),
-            lr=lr,
-            weight_decay=weight_decay
+            self.model.parameters(), lr=lr, weight_decay=weight_decay
         )
         self.reconstruction_loss = masked_l1
         self.kl_loss = kl_loss
@@ -57,7 +58,9 @@ class ACTransformerTrainer(Trainer):
                 "epoch": epoch,
                 "model_state_dict": self.model.state_dict(),
                 "optimizer_state_dict": self.optimizer.state_dict(),
-                "scaler_state_dict": (self.scaler.state_dict() if self.scaler is not None else None),
+                "scaler_state_dict": (
+                    self.scaler.state_dict() if self.scaler is not None else None
+                ),
                 "train_loss": train_loss,
             },
             self.ckpt_path,
@@ -80,7 +83,9 @@ class ACTransformerTrainer(Trainer):
                 if self.scaler is not None:
                     with self.amp_ctx:
                         pred, mu, logvar = self.model(image, state, target, mask)
-                        reconstruction_loss = self.reconstruction_loss(pred, target, mask)
+                        reconstruction_loss = self.reconstruction_loss(
+                            pred, target, mask
+                        )
                         kl_loss_ = self.kl_loss(mu, logvar).mean()
                         loss = reconstruction_loss + (self.beta * kl_loss_)
                     self.scaler.scale(loss).backward()
@@ -94,7 +99,9 @@ class ACTransformerTrainer(Trainer):
                 else:
                     with self.amp_ctx:
                         pred, mu, logvar = self.model(image, state, target, mask)
-                        reconstruction_loss = self.reconstruction_loss(pred, target, mask)
+                        reconstruction_loss = self.reconstruction_loss(
+                            pred, target, mask
+                        )
                         kl_loss_ = self.kl_loss(mu, logvar).mean()
                         loss = reconstruction_loss + (self.beta * kl_loss_)
                     loss.backward()
@@ -103,7 +110,6 @@ class ACTransformerTrainer(Trainer):
                             self.model.parameters(), self.grad_clip
                         )
                     self.optimizer.step()
-
 
                 epoch_loss += loss.item()
                 step += 1
@@ -121,7 +127,4 @@ class ACTransformerTrainer(Trainer):
                 )
 
             if (epoch + 1) % 10 == 0:
-                print(
-                    f"Epoch [{epoch + 1}/{self.epochs}] "
-                    f"Loss: {train_loss:.6f}"
-                )
+                print(f"Epoch [{epoch + 1}/{self.epochs}] " f"Loss: {train_loss:.6f}")

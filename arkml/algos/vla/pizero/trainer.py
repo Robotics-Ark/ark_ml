@@ -1,13 +1,13 @@
 import os
-import shutil
 from datetime import datetime
 from typing import Any
 
 import torch
-from arkml.core.algorithm import Trainer
-from arkml.core.policy import BasePolicy
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+
+from arkml.core.algorithm import Trainer
+from arkml.core.policy import BasePolicy
 
 
 class PiZeroTrainer(Trainer):

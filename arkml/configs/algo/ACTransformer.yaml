@@ -1,5 +1,5 @@
 name: action_chunking_transformer
-model :
+model:
   type: ACTransformer
   name: ACTransformer
   joint_dim: 10
@@ -7,7 +7,7 @@ model :
   checkpoint: "/Users/abhineetkumar/arkprojects/act-training/best1.pt"
 
 
-trainer :
+trainer:
   seed: 42
   chunk_size: 50
   batch_size: 2

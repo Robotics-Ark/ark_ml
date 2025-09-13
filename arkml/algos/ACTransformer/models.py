@@ -1,24 +1,33 @@
 import torch
 import torch.nn as nn
 from torchvision.models import resnet18, ResNet18_Weights
+
 from arkml.core.registry import MODELS
 
+
 def sinusoid_1d(length, dim, device, dtype=torch.float32):
-    pos = torch.arange(length, device=device, dtype=dtype).unsqueeze(1)          # (L,1)
-    i   = torch.arange(dim, device=device, dtype=dtype).unsqueeze(0)             # (1,D)
-    angle_rates = torch.pow(torch.tensor(10000.0, device=device, dtype=dtype), -(2 * (i // 2)) / dim)
-    angles = pos * angle_rates                                                   # (L,D)
+    pos = torch.arange(length, device=device, dtype=dtype).unsqueeze(1)  # (L,1)
+    i = torch.arange(dim, device=device, dtype=dtype).unsqueeze(0)  # (1,D)
+    angle_rates = torch.pow(
+        torch.tensor(10000.0, device=device, dtype=dtype), -(2 * (i // 2)) / dim
+    )
+    angles = pos * angle_rates  # (L,D)
     pe = torch.zeros((length, dim), device=device, dtype=dtype)
     pe[:, 0::2] = torch.sin(angles[:, 0::2])
     pe[:, 1::2] = torch.cos(angles[:, 1::2])
-    return pe                               # (L,D)
+    return pe  # (L,D)
+
 
 def sinusoid_2d(h, w, dim, device, dtype=torch.float32):
     assert dim % 2 == 0
-    pe_h = sinusoid_1d(h, dim // 2, device, dtype)[:, None, :].repeat(1, w, 1)   # (H,W, D/2)
-    pe_w = sinusoid_1d(w, dim // 2, device, dtype)[None, :, :].repeat(h, 1, 1)   # (H,W,D/2)
-    pe = torch.cat([pe_h, pe_w], dim=-1)                                         # (H,W,D)
-    return pe.view(h * w, dim)                                                   # (HW,D)
+    pe_h = sinusoid_1d(h, dim // 2, device, dtype)[:, None, :].repeat(
+        1, w, 1
+    )  # (H,W, D/2)
+    pe_w = sinusoid_1d(w, dim // 2, device, dtype)[None, :, :].repeat(
+        h, 1, 1
+    )  # (H,W,D/2)
+    pe = torch.cat([pe_h, pe_w], dim=-1)  # (H,W,D)
+    return pe.view(h * w, dim)  # (HW,D)
 
 
 class ResNet18Tokens(nn.Module):
@@ -27,8 +36,14 @@ class ResNet18Tokens(nn.Module):
         super().__init__()
         base = resnet18(weights=ResNet18_Weights.DEFAULT if pretrained else None)
         self.stem = nn.Sequential(
-            base.conv1, base.bn1, base.relu, base.maxpool,
-            base.layer1, base.layer2, base.layer3, base.layer4
+            base.conv1,
+            base.bn1,
+            base.relu,
+            base.maxpool,
+            base.layer1,
+            base.layer2,
+            base.layer3,
+            base.layer4,
         )
         if freeze_bn:
             self._freeze_bn(self.stem)
@@ -47,8 +62,8 @@ class ResNet18Tokens(nn.Module):
         """
         x: (B,3,H,W)  ->  tokens: (B, HW, d_model)
         """
-        feat = self.stem(x)               # (B,512,h,w)
-        feat = self.proj(feat)            # (B,d,h,w)
+        feat = self.stem(x)  # (B,512,h,w)
+        feat = self.proj(feat)  # (B,d,h,w)
         B, d, h, w = feat.shape
         tokens = feat.flatten(2).transpose(1, 2)  # (B, hw, d)
 
@@ -63,18 +78,29 @@ class ResNet18Tokens(nn.Module):
 @MODELS.register("ACTransformer")
 class ACT(nn.Module):
 
-    def __init__(self, joint_dim=10, action_dim=8, z_dim=32,
-                 d_model=512, ffn_dim=3200, nhead=8,
-                 enc_layers=4, dec_layers=7, dropout=0.1,
-                 max_len=256, pretrained_resnet=True):
+    def __init__(
+        self,
+        joint_dim=10,
+        action_dim=8,
+        z_dim=32,
+        d_model=512,
+        ffn_dim=3200,
+        nhead=8,
+        enc_layers=4,
+        dec_layers=7,
+        dropout=0.1,
+        max_len=256,
+        pretrained_resnet=True,
+    ):
         super().__init__()
         self.d_model = d_model
         self.z_dim = z_dim
         self.action_dim = action_dim
         self.max_len = max_len
 
-
-        self.img_enc = ResNet18Tokens(d_model=d_model, freeze_bn=True, pretrained=pretrained_resnet)
+        self.img_enc = ResNet18Tokens(
+            d_model=d_model, freeze_bn=True, pretrained=pretrained_resnet
+        )
 
         # Tokens for joints & z
         self.joint_proj = nn.Linear(joint_dim, d_model)
@@ -82,8 +108,12 @@ class ACT(nn.Module):
 
         # Transformer encoder over observation tokens
         enc_layer = nn.TransformerEncoderLayer(
-            d_model=d_model, nhead=nhead, dim_feedforward=ffn_dim,
-            dropout=dropout, batch_first=True, activation="gelu"
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=ffn_dim,
+            dropout=dropout,
+            batch_first=True,
+            activation="gelu",
         )
         self.obs_encoder = nn.TransformerEncoder(enc_layer, num_layers=enc_layers)
 
@@ -92,8 +122,12 @@ class ACT(nn.Module):
         self.step_pos = nn.Embedding(max_len, d_model)
         self.joint_embed_for_q = nn.Linear(joint_dim, d_model)
         q_layer = nn.TransformerEncoderLayer(
-            d_model=d_model, nhead=nhead, dim_feedforward=ffn_dim,
-            dropout=dropout, batch_first=True, activation="gelu"
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=ffn_dim,
+            dropout=dropout,
+            batch_first=True,
+            activation="gelu",
         )
         self.q_encoder = nn.TransformerEncoder(q_layer, num_layers=enc_layers)
         self.to_mu = nn.Linear(d_model, z_dim)
@@ -101,12 +135,18 @@ class ACT(nn.Module):
 
         # --- Transformer decoder (autoregressive over K) ---
         dec_layer = nn.TransformerDecoderLayer(
-            d_model=d_model, nhead=nhead, dim_feedforward=ffn_dim,
-            dropout=dropout, batch_first=True, activation="gelu"
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=ffn_dim,
+            dropout=dropout,
+            batch_first=True,
+            activation="gelu",
         )
         self.decoder = nn.TransformerDecoder(dec_layer, num_layers=dec_layers)
         self.tgt_pos = nn.Embedding(max_len, d_model)
-        self.out_head = nn.Sequential(nn.LayerNorm(d_model), nn.Linear(d_model, action_dim))
+        self.out_head = nn.Sequential(
+            nn.LayerNorm(d_model), nn.Linear(d_model, action_dim)
+        )
 
         # CLS token for obs encoder
         self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
@@ -117,10 +157,12 @@ class ACT(nn.Module):
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 nn.init.trunc_normal_(m.weight, std=0.02)
-                if m.bias is not None: nn.init.zeros_(m.bias)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, nonlinearity="relu")
-                if m.bias is not None: nn.init.zeros_(m.bias)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
 
     def infer_posterior(self, action_seq, joints, mask):
 
@@ -129,12 +171,14 @@ class ACT(nn.Module):
         steps = torch.arange(K, device=action_seq.device).unsqueeze(0).expand(B, K)
         a_tok = a_tok + self.step_pos(steps)
         joints_tok = self.joint_embed_for_q(joints).unsqueeze(1)  # (B,1,d)
-        seq = torch.cat([joints_tok, a_tok], dim=1)               # (B,1+K,d)
+        seq = torch.cat([joints_tok, a_tok], dim=1)  # (B,1+K,d)
 
         # key padding: 0->keep, 1->mask
-        key_pad = torch.cat([torch.zeros(B, 1, device=mask.device), 1.0 - mask], dim=1).bool()
-        enc = self.q_encoder(seq, src_key_padding_mask=key_pad)   # (B,1+K,d)
-        cls_feat = enc[:, 0]                                      # (B,d)
+        key_pad = torch.cat(
+            [torch.zeros(B, 1, device=mask.device), 1.0 - mask], dim=1
+        ).bool()
+        enc = self.q_encoder(seq, src_key_padding_mask=key_pad)  # (B,1+K,d)
+        cls_feat = enc[:, 0]  # (B,d)
         mu = self.to_mu(cls_feat)
         logvar = self.to_logvar(cls_feat)
         std = torch.exp(0.5 * logvar)
@@ -157,7 +201,9 @@ class ACT(nn.Module):
         elif joints.dim() == 1:
             joints = joints.unsqueeze(0)  # (1, J) -> (B, J) if B==1
         elif joints.dim() != 2:
-            raise ValueError(f"Expected joints to be (B,J) or (B,1,J), got {tuple(joints.shape)}")
+            raise ValueError(
+                f"Expected joints to be (B,J) or (B,1,J), got {tuple(joints.shape)}"
+            )
 
         img_tokens = self.img_enc(image)  # (B, hw, d)
         joints_tok = self.joint_proj(joints).unsqueeze(1)  # (B, 1, d)
@@ -173,14 +219,13 @@ class ACT(nn.Module):
 
         # (B, N, d)
 
-
     def decode_actions(self, memory, K):
         B = memory.size(0)
         steps = torch.arange(K, device=memory.device).unsqueeze(0).expand(B, K)
-        tgt = self.tgt_pos(steps)                        # (B,K,d)
+        tgt = self.tgt_pos(steps)  # (B,K,d)
         causal = torch.triu(torch.ones(K, K, device=memory.device), diagonal=1).bool()
-        out = self.decoder(tgt, memory, tgt_mask=causal) # (B,K,d)
-        return self.out_head(out)                        # (B,K,A)
+        out = self.decoder(tgt, memory, tgt_mask=causal)  # (B,K,d)
+        return self.out_head(out)  # (B,K,A)
 
     def forward(self, image, joints, action_seq, mask):
         """
@@ -195,12 +240,14 @@ class ACT(nn.Module):
         pred = self.decode_actions(memory, K)
         return pred, mu, logvar
 
+
 def masked_l1(pred, target, mask):
-    diff = (pred - target).abs()         # (B,K,A)
+    diff = (pred - target).abs()  # (B,K,A)
     m = mask.unsqueeze(-1)
     num = (diff * m).sum()
     den = (m.sum() * pred.size(-1)).clamp_min(1.0)
     return num / den
+
 
 def kl_loss(mu, logvar):
     # KL(q||p), p=N(0,I)

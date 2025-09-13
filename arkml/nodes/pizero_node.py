@@ -1,8 +1,9 @@
 import torch
-from arkml.algos.vla.pizero.models import PiZeroNet
 from arkml.core.policy_node import PolicyNode
 from arktypes import task_space_command_t, string_t
 from arktypes.utils import pack
+
+from arkml.algos.vla.pizero.models import PiZeroNet
 
 
 class PiZeroPolicyNode(PolicyNode):

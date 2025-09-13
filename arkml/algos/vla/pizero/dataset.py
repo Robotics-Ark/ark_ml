@@ -4,8 +4,9 @@ from typing import Any
 
 import torch
 from PIL import Image
-from arkml.core.dataset import ArkDataset
 from torchvision import transforms
+
+from arkml.core.dataset import ArkDataset
 
 
 class PiZeroDataset(ArkDataset):

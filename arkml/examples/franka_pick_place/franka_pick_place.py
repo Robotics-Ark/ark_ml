@@ -1,11 +1,10 @@
-from typing import Any
-import time
 import json
+import time
+from typing import Any
 
 import hydra
 import torch
-
-from arkml.nodes.policy_registry import get_policy_node
+from ark_framework.ark.client.comm_infrastructure.instance_node import InstanceNode
 from arktypes import (
     task_space_command_t,
     pose_t,
@@ -17,7 +16,6 @@ from arktypes import (
 from arktypes.utils import unpack
 from omegaconf import DictConfig, OmegaConf
 
-from ark_framework.ark.client.comm_infrastructure.instance_node import InstanceNode
 from arkml.examples.franka_pick_place.franka_pick_place_env import RobotEnv
 
 

@@ -1,8 +1,9 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
-from arkml.core.policy import BasePolicy
 from torch.utils.data import DataLoader
+
+from arkml.core.policy import BasePolicy
 
 
 class Trainer(ABC):

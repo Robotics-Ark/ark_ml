@@ -8,10 +8,11 @@ directly or a tuple whose first element is the loss.
 from typing import Any
 
 import torch
-from arkml.core.algorithm import Evaluator
-from arkml.core.policy import BasePolicy
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
+
+from arkml.core.algorithm import Evaluator
+from arkml.core.policy import BasePolicy
 
 
 class PiZeroEvaluator(Evaluator):

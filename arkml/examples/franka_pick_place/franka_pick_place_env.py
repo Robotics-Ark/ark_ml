@@ -3,7 +3,6 @@ from typing import Any
 import numpy as np
 from ark.env.ark_env import ArkEnv
 from arktypes.utils import pack, unpack
-from omegaconf import DictConfig
 
 
 class RobotEnv(ArkEnv):

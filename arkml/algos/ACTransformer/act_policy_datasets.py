@@ -1,35 +1,43 @@
-from typing import Any, Dict, List, Tuple, Optional
-import numpy as np
-import torch
-from torch.utils.data import Dataset
-from arkml.core.registry import DATASETS
-from torchvision import transforms as T
-from arkml.core.dataset import ArkDataset
 import glob
-import gc
-import pickle
 import os
+import pickle
+from typing import Any, Dict, List, Tuple, Optional
 
-tfm = T.Compose([
-    T.ToTensor(),
-    T.Resize((256, 256), antialias=True),
-])
+import torch
+from torchvision import transforms as T
+
+from arkml.core.dataset import ArkDataset
+from arkml.core.registry import DATASETS
+
+tfm = T.Compose(
+    [
+        T.ToTensor(),
+        T.Resize((256, 256), antialias=True),
+    ]
+)
+
 
 def _split_state(state: Any) -> Tuple[torch.Tensor, Any]:
     if not hasattr(state, "__getitem__"):
         raise TypeError(f"state must be indexable, got {type(state)}")
     if len(state) < 11:
-        raise ValueError(f"state must have at least 11 items (10-dim + image), got {len(state)}")
+        raise ValueError(
+            f"state must have at least 11 items (10-dim + image), got {len(state)}"
+        )
     s_vec = state[:10]
     s_t = torch.as_tensor(s_vec, dtype=torch.float32)
     img = tfm(state[10])
     return s_t, img
 
+
 def _to_action_tensor(action: Any) -> torch.Tensor:
     a = torch.as_tensor(action, dtype=torch.float32)
     if a.numel() != 8:
-        raise ValueError(f"action must have 8 elements, got shape {tuple(a.shape)} with {a.numel()} elems")
+        raise ValueError(
+            f"action must have 8 elements, got shape {tuple(a.shape)} with {a.numel()} elems"
+        )
     return a.reshape(8)
+
 
 @DATASETS.register("act_dataset")
 class ActionChunkingArkDataset(ArkDataset):
@@ -67,12 +75,16 @@ class ActionChunkingArkDataset(ArkDataset):
         self.cache_size = 5
 
         if files is None:
-            self.files: List[str] = sorted(glob.glob(os.path.join(self.dataset_path, "*.pkl")))
+            self.files: List[str] = sorted(
+                glob.glob(os.path.join(self.dataset_path, "*.pkl"))
+            )
         else:
             self.files = sorted(files)
 
         if not self.files:
-            raise FileNotFoundError(f"No .pkl trajectories found in {self.dataset_path}")
+            raise FileNotFoundError(
+                f"No .pkl trajectories found in {self.dataset_path}"
+            )
 
         # Simple LRU cache for trajectories
         self._cache: Dict[str, List[dict]] = {}
@@ -144,12 +156,12 @@ class ActionChunkingArkDataset(ArkDataset):
         s_next, img_next = _split_state(traj[end_idx]["next_state"])
 
         return {
-            "state": s_t,             # (10,)
-            "image": img_t,           # original image object
+            "state": s_t,  # (10,)
+            "image": img_t,  # original image object
             "action_chunk": actions,  # (K, 8)
-            "action_mask": mask,      # (K,)
-            "next_state": s_next,     # (10,)
-            "next_image": img_next,   # original image object
+            "action_mask": mask,  # (K,)
+            "next_state": s_next,  # (10,)
+            "next_image": img_next,  # original image object
             "meta": {
                 "path": path,
                 "t0": t0,

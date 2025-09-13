@@ -1,13 +1,13 @@
-import torch
 from typing import Any
 
-from arkml.algos.ACTransformer.evaluator import ACTransformerEvaluator
-from arkml.core.registry import ALGOS
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 
-from arkml.core.algorithm import BaseAlgorithm
+from arkml.algos.ACTransformer.evaluator import ACTransformerEvaluator
 from arkml.algos.ACTransformer.trainer import ACTransformerTrainer
+from arkml.core.algorithm import BaseAlgorithm
+from arkml.core.registry import ALGOS
+
 
 # TODO use the configurations correctly
 @ALGOS.register("action_chunking_transformer")

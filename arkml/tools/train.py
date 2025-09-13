@@ -1,10 +1,11 @@
 import hydra
 import torch
-from arkml.core.factory import build_model
-from arkml.core.registry import DATASETS, ALGOS
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
+
+from arkml.core.factory import build_model
+from arkml.core.registry import DATASETS, ALGOS
 
 
 # TODO Move dataloader to algorithm

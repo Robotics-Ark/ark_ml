@@ -2,13 +2,13 @@ import os
 from typing import Any
 
 import torch
-from arkml.core.algorithm import BaseAlgorithm
-from arkml.core.policy import BasePolicy
-from arkml.core.registry import ALGOS
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 
+from arkml.core.algorithm import BaseAlgorithm
+from arkml.core.policy import BasePolicy
+from arkml.core.registry import ALGOS
 from .dataset import PiZeroDataset
 from .evaluator import PiZeroEvaluator
 from .trainer import PiZeroTrainer
