@@ -4,6 +4,7 @@ model:
   name: ACTransformer
   joint_dim: 10
   action_dim: 8
+  obs_horizon: 1
   checkpoint: "/Users/abhineetkumar/arkprojects/act-training/best1.pt"
 
 

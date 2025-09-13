@@ -17,7 +17,7 @@ from arktypes import (
 from arktypes.utils import unpack
 from omegaconf import DictConfig, OmegaConf
 
-from ark_framework.ark.client.comm_infrastructure.instance_node import InstanceNode
+from ark.client.comm_infrastructure.instance_node import InstanceNode
 from arkml.examples.franka_pick_place.franka_pick_place_env import RobotEnv
 
 
@@ -59,7 +59,7 @@ class RobotNode(InstanceNode):
         self.truncated = None
         self.terminated = None
         self.next_command = None
-        self.create_publisher("observation", string_t)
+        self.obs_pub=self.create_publisher("observation", string_t)
         self.create_subscriber("next_action", task_space_command_t, self.callback)
         self.create_stepper(10, self.step)
 
@@ -203,6 +203,7 @@ class RobotNode(InstanceNode):
                     else None
                 ),
                 "task": model_input.get("task", []),
+                "episode_over": self.terminated or self.truncated
             }
             obs_msg = string_t()
             obs_msg.data = json.dumps(payload)
@@ -234,7 +235,7 @@ def main(cfg: DictConfig) -> None:
     Returns:
       None. Prints progress and a final success summary to stdout.
     """
-    sim_config = "./sim_config/global_config.yaml"
+    sim_config = "/Users/abhineetkumar/actml/ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml" # TODO use relative bath
     environment_name = "diffusion_env"
 
     print("Config:\n", OmegaConf.to_yaml(cfg))

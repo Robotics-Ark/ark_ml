@@ -1,5 +1,3 @@
-import json
-
 import numpy as np
 import torch
 from arkml.algos.vla.pizero.models import PiZeroNet
@@ -51,25 +49,15 @@ class PiZeroPolicyNode(PolicyNode):
         Returns:
           numpy.ndarray: Action vector for the first batch element.
         """
-        # breakpoint()
-        # If observation comes as JSON string_t, convert to model input dict
-        if isinstance(obs_seq, str):
-            payload = json.loads(obs_seq)
-        elif hasattr(obs_seq, "data") and isinstance(obs_seq.data, str):
-            payload = json.loads(obs_seq.data)
-        elif isinstance(obs_seq, dict):
-            payload = obs_seq
-        else:
-            raise ValueError("Unsupported observation format")
 
         # Convert to tensors in the expected shapes
         obs = {}
-        if "image" in payload and payload["image"] is not None:
-            obs["image"] = torch.tensor(payload["image"], dtype=torch.float32)
-        if "state" in payload and payload["state"] is not None:
-            obs["state"] = torch.tensor(payload["state"], dtype=torch.float32)
-        if "task" in payload:
-            obs["task"] = payload["task"]
+        if "image" in obs_seq and obs_seq["image"] is not None:
+            obs["image"] = torch.tensor(obs_seq["image"], dtype=torch.float32)
+        if "state" in obs_seq and obs_seq["state"] is not None:
+            obs["state"] = torch.tensor(obs_seq["state"], dtype=torch.float32)
+        if "task" in obs_seq:
+            obs["task"] = obs_seq["task"]
 
         with torch.no_grad():
             action = self.policy.predict(obs)

@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torchvision.models import resnet18, ResNet18_Weights
+from typing import Any
 
 from arkml.core.registry import MODELS
 
@@ -184,6 +185,30 @@ class ACT(nn.Module):
         std = torch.exp(0.5 * logvar)
         z = mu + torch.randn_like(std) * std
         return mu, logvar, z
+
+    def to_device(self, device: str) -> Any:
+        """
+        Move the underlying policy to a device and return self.
+        Args:
+            device: Target device identifier (e.g., "cuda", "cpu").
+
+        Returns:
+            PiZeroNet: This instance, for method chaining.
+
+        """
+        pass
+
+    def set_eval_mode(self) -> None:
+        """
+        Set the underlying policy to evaluation mode.
+        """
+        pass
+
+    def set_train_mode(self) -> None:
+        """
+        Set the underlying policy to training mode.
+        """
+        pass
 
     # ----- Build observation memory -----
     def build_memory(self, image, joints, z):

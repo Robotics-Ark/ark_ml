@@ -7,7 +7,6 @@ import torch
 from torchvision import transforms as T
 
 from arkml.core.dataset import ArkDataset
-from arkml.core.registry import DATASETS
 
 tfm = T.Compose(
     [
@@ -39,7 +38,6 @@ def _to_action_tensor(action: Any) -> torch.Tensor:
     return a.reshape(8)
 
 
-@DATASETS.register("act_dataset")
 class ActionChunkingArkDataset(ArkDataset):
     """
     Trajectory dataset that yields fixed-length action chunks with masks.

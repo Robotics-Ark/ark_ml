@@ -4,10 +4,11 @@ import numpy as np
 from abc import abstractmethod, ABC
 from typing import Any
 from torch import nn
+import json
 
-from ark_framework.ark.client.comm_infrastructure.base_node import BaseNode
+# from ark_frameworkamework.ark.client.comm_infrastructure.base_node import BaseNode
 
-# from ark.client.comm_infrastructure.base_node import BaseNode
+from ark.client.comm_infrastructure.base_node import BaseNode
 
 
 class PolicyNode(ABC, BaseNode):
@@ -34,7 +35,8 @@ class PolicyNode(ABC, BaseNode):
 
         # Policy setup
         self.policy = policy
-        self.policy.to_device(device=device)
+        # TODO fix this
+        self.policy.to(device=device)
         self.policy.set_eval_mode()
 
         # Async inference infra
@@ -76,7 +78,17 @@ class PolicyNode(ABC, BaseNode):
         except queue.Empty:
             pass
         print(f"[NEW OBSERVATION] : {msg}")
-        self.obs_queue.put_nowait(msg)
+
+        if isinstance(msg, str):
+            payload = json.loads(msg)
+        elif hasattr(msg, "data") and isinstance(msg.data, str):
+            payload = json.loads(msg.data)
+        elif isinstance(msg, dict):
+            payload = msg
+        else:
+            raise ValueError("Unsupported observation format")
+
+        self.obs_queue.put_nowait(payload)
 
     def step(self):
         """Stepper loop: publish latest action if available."""

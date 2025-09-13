@@ -3,6 +3,7 @@ from typing import Callable
 import torch
 from omegaconf import DictConfig
 
+
 # Global registry for policy node builders
 _POLICY_BUILDERS: dict[str, Callable[[DictConfig, torch.device], object]] = {}
 
@@ -79,3 +80,9 @@ def _build_pizero(cfg: DictConfig, device: torch.device):
 def _build_smolvla(cfg: DictConfig, device: torch.device):
     """Build and return SmolVLA that reuses the PiZero builder."""
     return _build_pizero(cfg, device)
+
+@register_policy("action_chunking_transformer")
+def _build_ACTransformer(cfg: DictConfig, device: torch.device):
+    """Build and return ACTransformer"""
+    from arkml.nodes.actransformer import ActPolicyNode
+    return ActPolicyNode(model_cfg=cfg.algo.model, device=str(device))
