@@ -207,7 +207,6 @@ class RobotNode(InstanceNode):
             obs_msg = string_t()
             obs_msg.data = json.dumps(payload)
             self.obs_pub.publish(obs_msg)
-            # breakpoint()
 
             # Stepper advances env asynchronously via next_action
             if self.truncated or self.terminated:

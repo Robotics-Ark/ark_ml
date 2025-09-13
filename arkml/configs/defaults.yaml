@@ -1,6 +1,6 @@
 defaults:
-  - algo: pizero
-  - data: pizero_dataset
+  - algo: diffusion
+  - data: diffusion_dataset
 
 # general overrides
 seed: 42
@@ -9,7 +9,3 @@ checkpoint: None
 task_prompt: ""
 n_episodes: 10
 max_steps: 500
-
-# Pub-Sub
-channel_type: null
-message_type: null
