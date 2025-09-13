@@ -1,16 +1,24 @@
+from typing import Any
+import time
+import json
+
 import hydra
 import torch
+
+from arkml.nodes.policy_registry import get_policy_node
 from arktypes import (
     task_space_command_t,
     pose_t,
     joint_state_t,
     rigid_body_state_t,
     rgbd_t,
+    string_t,
 )
+from arktypes.utils import unpack
 from omegaconf import DictConfig, OmegaConf
 
-from arkml.examples.franka_pick_place_env import RobotEnv
-from arkml.nodes.policy_registry import get_policy_node
+from ark_framework.ark.client.comm_infrastructure.instance_node import InstanceNode
+from arkml.examples.franka_pick_place.franka_pick_place_env import RobotEnv
 
 
 def default_channels() -> dict[str, dict[str, type]]:
@@ -34,7 +42,7 @@ def default_channels() -> dict[str, dict[str, type]]:
     return {"actions": action_channels, "observations": observation_channels}
 
 
-class RobotNode:
+class RobotNode(InstanceNode):
     """Manages env-policy interactions.
 
     Args:
@@ -43,11 +51,19 @@ class RobotNode:
       obs_horizon: Number of most recent observations to stack for the policy.
     """
 
-    def __init__(self, env, policy_node, obs_horizon=8):
+    def __init__(self, env, obs_horizon=8):
+        super().__init__("Robot")
         self.env = env
-        self.policy_node = policy_node
         self.obs_horizon = obs_horizon
         self.obs_history = []
+        self.truncated = None
+        self.terminated = None
+        self.next_command = None
+        self.obs_pub = self.create_publisher("observation", string_t)
+        self.cme_sub = self.create_subscriber(
+            "next_action", task_space_command_t, self.callback
+        )
+        self.create_stepper(10, self.step)
 
     def reset(self):
         """Reset environment and bootstrap observation history.
@@ -59,7 +75,22 @@ class RobotNode:
         self.obs_history = [obs] * self.obs_horizon  # bootstrap with repeated obs
         return obs, info
 
-    def step(self, action):
+    def callback(self, t, channel_name, msg):
+        # Convert incoming task-space command into 8D action vector
+        name, pos, quat, grip = unpack.task_space_command(msg)
+        # breakpoint()
+        self.next_command = [
+            float(pos[0]),
+            float(pos[1]),
+            float(pos[2]),
+            float(quat[0]),
+            float(quat[1]),
+            float(quat[2]),
+            float(quat[3]),
+            float(grip),
+        ]
+
+    def step(self):
         """Step the environment once and update history.
 
         Args:
@@ -68,11 +99,14 @@ class RobotNode:
         Returns:
           ``(obs, reward, terminated, truncated, info)`` from the env.
         """
-        obs, reward, terminated, truncated, info = self.env.step(action)
+        if self.next_command is None:
+            return
+        obs, reward, self.terminated, self.truncated, info = self.env.step(
+            self.next_command
+        )
         self.obs_history.append(obs)
         if len(self.obs_history) > self.obs_horizon:
-            self.obs_history.pop(0)  # keep window size fixed
-        return obs, reward, terminated, truncated, info
+            self.obs_history.pop(0)  # keep window size fixe
 
     def get_obs_sequence(self, task_prompt: str):
         """Prepare a stacked observation batch for the policy.
@@ -154,36 +188,35 @@ class RobotNode:
           indicate episode termination status.
         """
         _, _ = self.reset()
-        terminated = False
-        truncated = False
-
         for _ in range(max_steps):
+            # Prepare current observation batch for the policy
             model_input = self.get_obs_sequence(task_prompt=task_prompt)
-            actions = self.policy_node.predict(model_input)
 
-            # Normalize to a sequence of actions [T, action_dim]
-            if actions is None:
-                raise RuntimeError("Policy returned None for actions.")
-            if actions.ndim == 1:
-                actions_seq = actions[None, :]
-            else:
-                start = obs_horizon + 1
-                end = start + action_horizon
-                actions_seq = actions[start:end]
+            # Serialize observation to JSON (lists) and publish on generic channel
+            payload = {
+                "image": (
+                    model_input.get("image").tolist()
+                    if "image" in model_input
+                    else None
+                ),
+                "state": (
+                    model_input.get("state").tolist()
+                    if "state" in model_input
+                    else None
+                ),
+                "task": model_input.get("task", []),
+            }
+            obs_msg = string_t()
+            obs_msg.data = json.dumps(payload)
+            self.obs_pub.publish(obs_msg)
+            # breakpoint()
 
-            for a in actions_seq:
-                _, _, terminated, truncated, _ = self.step(a)
-                if step_sleep:
-                    import time as _t
-
-                    _t.sleep(step_sleep)
-                if terminated or truncated:
-                    break
-
-            if terminated or truncated:
+            # Stepper advances env asynchronously via next_action
+            if self.truncated or self.terminated:
                 break
+            time.sleep(step_sleep if step_sleep is not None else 0.1)
 
-        return self.obs_history, terminated, truncated
+        return self.terminated, self.truncated
 
 
 @hydra.main(
@@ -195,7 +228,7 @@ def main(cfg: DictConfig) -> None:
     Args:
       cfg: Hydra configuration composed of ``defaults.yaml`` and overrides.
         Expected keys include:
-        - sim_config (str): Path to the ARK global sim config.
+        - sim_config (str): Path to the Ark global sim config.
         - environment_name (str): Environment identifier.
         - algo (DictConfig): Algorithm group with ``name`` and ``model``.
         - n_episodes (int): Number of episodes to evaluate.
@@ -224,12 +257,10 @@ def main(cfg: DictConfig) -> None:
     # Device
     device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    policy_node = get_policy_node(cfg, device)
-
     # Robot node to manage history and interaction
     obs_horizon = cfg.algo.model.get("obs_horizon")
     action_horizon = cfg.algo.model.get("action_horizon")
-    robot_node = RobotNode(env=env, policy_node=policy_node, obs_horizon=obs_horizon)
+    robot_node = RobotNode(env=env, obs_horizon=obs_horizon)
 
     n_episodes = int(getattr(cfg, "n_episodes"))
 
@@ -237,9 +268,8 @@ def main(cfg: DictConfig) -> None:
     for ep in range(n_episodes):
         print(f"\n=== Episode {ep} ===")
         # Reset policy state between episodes
-        policy_node.reset()
 
-        _, terminated, truncated = robot_node.run_episode(
+        terminated, truncated = robot_node.run_episode(
             max_steps=int(getattr(cfg, "max_steps")),
             obs_horizon=obs_horizon,
             action_horizon=action_horizon,

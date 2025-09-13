@@ -16,4 +16,6 @@ def print_trainable_summary(root: nn.Module) -> None:
     """
     total = sum(p.numel() for p in root.parameters())
     trainable = sum(p.numel() for p in root.parameters() if p.requires_grad)
-    print(f"trainable params: {trainable:,} || all params: {total:,} || trainable%: {100.0 * trainable / total:.4f}")
+    print(
+        f"trainable params: {trainable:,} || all params: {total:,} || trainable%: {100.0 * trainable / total:.4f}"
+    )

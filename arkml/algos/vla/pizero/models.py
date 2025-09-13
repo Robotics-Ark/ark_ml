@@ -67,11 +67,13 @@ class PiZeroNet(BasePolicy, nn.Module):
             )
 
         # TODO need to investigate the policy config
-        # self._policy.config.norm_map = {
-        #     FeatureType.STATE: NormalizationMode.IDENTITY,
-        #     FeatureType.VISUAL: NormalizationMode.IDENTITY,
-        #     FeatureType.ACTION: NormalizationMode.IDENTITY,
-        # }
+        self._policy.config.norm_map = {
+            FeatureType.STATE: NormalizationMode.IDENTITY,
+            FeatureType.VISUAL: NormalizationMode.IDENTITY,
+            # FeatureType.VISUAL: NormalizationMode.MEAN_STD,
+            FeatureType.ACTION: NormalizationMode.IDENTITY,
+            # FeatureType.ACTION: NormalizationMode.MEAN_STD,
+        }
 
         self._policy.config.input_features = {
             "observation.images.image": PolicyFeature(
@@ -85,15 +87,15 @@ class PiZeroNet(BasePolicy, nn.Module):
             "action": PolicyFeature(type=FeatureType.ACTION, shape=(self.action_dim,)),
         }
 
-        # self._policy.normalize_inputs = Normalize(
-        #     self._policy.config.input_features,
-        #     self._policy.config.norm_map,
-        # )
-        #
-        # self._policy.unnormalize_outputs = Unnormalize(
-        #     self._policy.config.output_features,
-        #     self._policy.config.norm_map,
-        # )
+        self._policy.normalize_inputs = Normalize(
+            self._policy.config.input_features,
+            self._policy.config.norm_map,
+        )
+
+        self._policy.unnormalize_outputs = Unnormalize(
+            self._policy.config.output_features,
+            self._policy.config.norm_map,
+        )
 
         if self.is_lora_enabled:
             raise NotImplementedError("Lora policies not implemented yet to VLA.")

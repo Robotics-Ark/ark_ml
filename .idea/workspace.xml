@@ -5,16 +5,26 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="29692605-778d-4c71-b9f0-4eb8a6657821" name="Changes" comment="[UPDATE] cleaned Action chunking dataset">
-      <change afterPath="$PROJECT_DIR$/arkml/algos/__init__.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/arkml/examples/franka_pick_place/__init__.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/arkml/examples/sim_node.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/arkml/algos/ACTransformer/algorithm.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/algos/ACTransformer/algorithm.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/arkml/algos/ACTransformer/evaluator.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/algos/ACTransformer/evaluator.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/arkml/configs/algo/ACTransformer.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/configs/algo/ACTransformer.yaml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/arkml/configs/data/act_dataset.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/configs/data/act_dataset.yaml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/algos/ACTransformer/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/algos/vla/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/algos/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/examples/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/algos/diffusion_policy/algorithm.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/algos/diffusion_policy/evaluator.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/algos/diffusion_policy/models.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/algos/diffusion_policy/trainer.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/algos/utils.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/algos/utils.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/algos/vla/pizero/algorithm.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/algos/vla/pizero/algorithm.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/algos/vla/pizero/dataset.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/algos/vla/pizero/dataset.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/algos/vla/pizero/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/algos/vla/pizero/models.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/configs/algo/diffusion.yaml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/configs/data/diffusion_dataset.yaml" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/arkml/core/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/core/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/arkml/datasets/act_policy_datasets.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/algos/ACTransformer/act_policy_datasets.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/arkml/nodes/act_node.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/arkml/tools/rollout.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/examples/franka_pick_place/franka_config/robots/ark_franka/setup.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/examples/franka_pick_place/franka_config/robots/ark_franka/setup.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/examples/franka_pick_place/franka_pick_place.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/examples/franka_pick_place/franka_pick_place.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/examples/franka_pick_place/franka_pick_place_env.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/examples/franka_pick_place/franka_pick_place_env.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/arkml/nodes/diffusion_node.py" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/arkml/tools/train.py" beforeDir="false" afterPath="$PROJECT_DIR$/arkml/tools/train.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -169,7 +179,15 @@
       <option name="project" value="LOCAL" />
       <updated>1757716701885</updated>
     </task>
-    <option name="localTasksCounter" value="7" />
+    <task id="LOCAL-00007" summary="[UPDATE] cleaned Action chunking dataset">
+      <option name="closed" value="true" />
+      <created>1757777788115</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1757777788115</updated>
+    </task>
+    <option name="localTasksCounter" value="8" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">

@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 
 
+# TODO Move dataloader to algorithm
 @hydra.main(config_path="../configs", config_name="defaults.yaml", version_base="1.3")
 def main(cfg: DictConfig):
     print("Config:\n", OmegaConf.to_yaml(cfg))
