@@ -5,7 +5,7 @@ import torch.nn as nn
 from arkml.core.policy import BasePolicy
 from arkml.core.registry import MODELS
 from lerobot.configs.types import FeatureType, PolicyFeature, NormalizationMode
-from lerobot.policies.normalize import Normalize, Unnormalize
+# from lerobot.policies.normalize import Normalize, Unnormalize
 from lerobot.policies.pi0.modeling_pi0 import PI0Policy
 from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 from torch import tensor
@@ -69,8 +69,10 @@ class PiZeroNet(BasePolicy, nn.Module):
         # TODO need to investigate the policy config
         self._policy.config.norm_map = {
             FeatureType.STATE: NormalizationMode.IDENTITY,
-            FeatureType.VISUAL: NormalizationMode.MEAN_STD,
-            FeatureType.ACTION: NormalizationMode.MEAN_STD,
+            FeatureType.VISUAL: NormalizationMode.IDENTITY,
+            # FeatureType.VISUAL: NormalizationMode.MEAN_STD,
+            FeatureType.ACTION: NormalizationMode.IDENTITY,
+            # FeatureType.ACTION: NormalizationMode.MEAN_STD,
         }
 
         self._policy.config.input_features = {

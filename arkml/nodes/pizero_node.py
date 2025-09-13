@@ -1,6 +1,7 @@
 import json
-import torch
+
 import numpy as np
+import torch
 from arkml.algos.vla.pizero.models import PiZeroNet
 from arkml.core.policy_node import PolicyNode
 from arktypes import task_space_command_t, string_t
@@ -16,9 +17,7 @@ class PiZeroPolicyNode(PolicyNode):
     """
 
     def __init__(self, model_cfg, device="cuda", global_config=None):
-        self.task_prompt = None
-
-        self.policy = PiZeroNet(
+        policy = PiZeroNet(
             policy_type=model_cfg.policy_type,
             model_path=model_cfg.model_path,
             obs_dim=model_cfg.obs_dim,
@@ -26,10 +25,10 @@ class PiZeroPolicyNode(PolicyNode):
             image_dim=model_cfg.image_dim,
         )
         super().__init__(
-            policy=self.policy,
+            policy=policy,
             device=device,
-            channel_type=string_t,  # generic observation as JSON string
-            message_type=task_space_command_t,  # publish robot-agnostic task-space command
+            channel_type=string_t,
+            message_type=task_space_command_t,
             global_config=global_config,
         )
 
@@ -61,16 +60,14 @@ class PiZeroPolicyNode(PolicyNode):
         elif isinstance(obs_seq, dict):
             payload = obs_seq
         else:
-            raise ValueError("Unsupported observation format for PiZeroPolicyNode")
+            raise ValueError("Unsupported observation format")
 
         # Convert to tensors in the expected shapes
         obs = {}
         if "image" in payload and payload["image"] is not None:
-            img = torch.tensor(payload["image"], dtype=torch.float32)
-            obs["image"] = img
+            obs["image"] = torch.tensor(payload["image"], dtype=torch.float32)
         if "state" in payload and payload["state"] is not None:
-            st = torch.tensor(payload["state"], dtype=torch.float32)
-            obs["state"] = st
+            obs["state"] = torch.tensor(payload["state"], dtype=torch.float32)
         if "task" in payload:
             obs["task"] = payload["task"]
 
@@ -78,22 +75,13 @@ class PiZeroPolicyNode(PolicyNode):
             action = self.policy.predict(obs)
         return action.detach().cpu().numpy()[0]
 
-    def step(self):
-        if self.curr_observation is None:
-            return
-
-        # Run policy inference given the latest observation payload
-        action = self.predict(obs_seq=self.curr_observation)
-        print(f"[ACTION PREDICTION] {action}")
-        # breakpoint()
-
-        # Expect an 8D action: [x, y, z, qx, qy, qz, qw, gripper]
+    def publish_action(self, action: np.ndarray):
+        """Pack and publish action to downstream consumers."""
         if action.shape[0] < 8:
             return
 
         xyz = np.asarray(action[:3], dtype=np.float32)
         quat = np.asarray(action[3:7], dtype=np.float32)
         grip = float(action[7])
-
-        msg = pack.task_space_command("franka", xyz, quat, grip)
+        msg = pack.task_space_command("next_action", xyz, quat, grip)
         self.pub.publish(msg)

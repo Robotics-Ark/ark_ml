@@ -1,7 +1,8 @@
+import threading
+import queue
+import numpy as np
 from abc import abstractmethod, ABC
 from typing import Any
-
-import numpy as np
 from torch import nn
 
 from ark_framework.ark.client.comm_infrastructure.base_node import BaseNode
@@ -10,61 +11,86 @@ from ark_framework.ark.client.comm_infrastructure.base_node import BaseNode
 
 
 class PolicyNode(ABC, BaseNode):
-    """Abstract base class for policy wrappers.
+    """Abstract base class for policy wrappers with async inference.
 
     Args:
       policy: Underlying policy module to be executed.
       device: Target device identifier (e.g., ``"cpu"``, ``"cuda"``).
     """
 
-    def __init__(self, policy: nn.Module, device: str, channel_type, message_type, global_config=None):
+    def __init__(
+        self,
+        policy: nn.Module,
+        device: str,
+        channel_type,
+        message_type,
+        global_config=None,
+    ):
         super().__init__("Policy", global_config)
+
+        # Publishers/subscribers
         self.pub = self.create_publisher("next_action", message_type)
-        self.create_stepper(5, self.step)
         self.create_subscriber("observation", channel_type, self.callback)
-        self.curr_observation = None
+
+        # Policy setup
         self.policy = policy
         self.policy.to_device(device=device)
         self.policy.set_eval_mode()
 
+        # Async inference infra
+        self.obs_queue = queue.Queue(maxsize=1)  # only keep latest obs
+        self.latest_action = None
+        self._stop_event = threading.Event()
+
+        self.worker_thread = threading.Thread(
+            target=self._inference_worker, daemon=True
+        )
+        self.worker_thread.start()
+
+        # Stepper publishes actions at fixed control frequency
+        self.create_stepper(5, self.step)
+
+    def _inference_worker(self):
+        """Background thread to run model inference asynchronously."""
+        while not self._stop_event.is_set():
+            try:
+                obs_seq = self.obs_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+
+            action = self.predict(obs_seq)
+            self.latest_action = action
+
     def reset(self) -> None:
-        """Reset the internal state of the policy.
-
-        This is a no-op for stateless policies, but sequence models or planners
-        may override this behavior via the wrapped ``policy.reset()``.
-        """
-
+        """Reset the internal state of the policy."""
         self.policy.reset()
+        self.latest_action = None
+        with self.obs_queue.mutex:
+            self.obs_queue.queue.clear()
 
-    def infer(self, obs_seq: dict[str, Any]) -> np.ndarray:
-        """Backward-compatible alias for ``predict``.
+    def callback(self, t, channel_name, msg):
+        """Subscriber callback for new observations."""
+        # Drop old obs if queue is full
+        try:
+            self.obs_queue.get_nowait()
+        except queue.Empty:
+            pass
+        print(f"[NEW OBSERVATION] : {msg}")
+        self.obs_queue.put_nowait(msg)
 
-        Args:
-          obs_seq: Observation input for the policy. Subclasses must document
-            the required structure and shapes.
+    def step(self):
+        """Stepper loop: publish latest action if available."""
+        if self.latest_action is None:
+            return
+        print(f"[ACTION PREDICTED] : {self.latest_action}")
+        self.publish_action(self.latest_action)
+        self.latest_action = None
 
-        Returns:
-          np.ndarray: Predicted action(s) as a NumPy array.
-        """
-
-        return self.predict(obs_seq)
+    def publish_action(self, action: np.ndarray):
+        """Publish action message. Subclasses may override for custom packing."""
+        raise NotImplementedError("Subclasses must implement publish_action")
 
     @abstractmethod
     def predict(self, obs_seq: dict[str, Any]) -> np.ndarray:
-        """Compute the action(s) from observations.
-
-        Args:
-          obs_seq: Observation input for the policy. Subclasses must document
-            the required structure and shapes.
-
-        Returns:
-          np.ndarray: Predicted action(s) as a NumPy array.
-        """
-
-        pass
-
-    @abstractmethod
-    def step(self): ...
-
-    def callback(self, t, channel_name, msg):
-        self.curr_observation = msg
+        """Compute the action(s) from observations."""
+        ...

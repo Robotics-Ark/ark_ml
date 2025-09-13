@@ -1,9 +1,6 @@
 from typing import Callable
 
 import torch
-from arkml.core.factory import build_model
-from arkml.nodes.diffusion_node import DiffusionPolicyNode
-from arkml.nodes.pizero_node import PiZeroPolicyNode
 from omegaconf import DictConfig
 
 # Global registry for policy node builders
@@ -62,39 +59,6 @@ def get_policy_node(cfg: DictConfig, device: torch.device):
     return builder(cfg, device)
 
 
-@register_policy("diffusion_policy")
-def _build_diffusion(cfg: DictConfig, device: torch.device):
-    """Build and return a DiffusionPolicyNode from config.
-
-    Args:
-      cfg: Configuration with diffusion model fields.
-      device: Device to load the model on.
-
-    Returns:
-      Configured diffusion policy node.
-    """
-    model = build_model(cfg.algo.model).to(device)
-
-    checkpoint_path = getattr(cfg, "checkpoint", None)
-    if not checkpoint_path:
-        raise ValueError("Model checkpoint path not provided")
-
-    policy_state = torch.load(checkpoint_path, map_location=device)
-    if isinstance(policy_state, dict) and "state_dict" in policy_state:
-        model.load_state_dict(policy_state["state_dict"])
-    else:
-        model.load_state_dict(policy_state)
-
-    num_steps = cfg.algo.model.get("diffusion_steps", 100)
-    return DiffusionPolicyNode(
-        model=model,
-        num_diffusion_iters=num_steps,
-        pred_horizon=cfg.algo.model.get("pred_horizon", 16),
-        action_dim=cfg.algo.model.get("action_dim", 8),
-        device=str(device),
-    )
-
-
 @register_policy("pizero")
 @register_policy("pi0")
 def _build_pizero(cfg: DictConfig, device: torch.device):
@@ -107,6 +71,7 @@ def _build_pizero(cfg: DictConfig, device: torch.device):
     Returns:
       Configured PiZeroPolicyNode  instance.
     """
+    from arkml.nodes.pizero_node import PiZeroPolicyNode
     return PiZeroPolicyNode(model_cfg=cfg.algo.model, device=str(device))
 
 
