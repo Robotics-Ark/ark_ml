@@ -67,11 +67,11 @@ class PiZeroNet(BasePolicy, nn.Module):
             )
 
         # TODO need to investigate the policy config
-        # self._policy.config.norm_map = {
-        #     FeatureType.STATE: NormalizationMode.IDENTITY,
-        #     FeatureType.VISUAL: NormalizationMode.IDENTITY,
-        #     FeatureType.ACTION: NormalizationMode.IDENTITY,
-        # }
+        self._policy.config.norm_map = {
+            FeatureType.STATE: NormalizationMode.IDENTITY,
+            FeatureType.VISUAL: NormalizationMode.MEAN_STD,
+            FeatureType.ACTION: NormalizationMode.MEAN_STD,
+        }
 
         self._policy.config.input_features = {
             "observation.images.image": PolicyFeature(

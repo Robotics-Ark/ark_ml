@@ -1,5 +1,0 @@
-name: diffusion_dataset
-dataset_path: ../data_collection/trajectories
-shuffle: true
-num_workers: 4
-subsample: 2
