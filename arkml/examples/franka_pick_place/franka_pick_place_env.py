@@ -1,3 +1,4 @@
+import time
 from typing import Any
 
 import numpy as np
@@ -24,6 +25,7 @@ class RobotEnv(ArkEnv):
         action_channels: dict[str, type],
         observation_channels: dict[str, type],
         max_steps: int,
+        step_sleep: float,
         sim=True,
     ):
         super().__init__(
@@ -36,6 +38,7 @@ class RobotEnv(ArkEnv):
         self.sim = sim
         self.max_steps = max_steps
         self.steps = 0
+        self.step_sleep = step_sleep
 
     @staticmethod
     def action_packing(action: list) -> dict[str, Any]:
@@ -137,6 +140,7 @@ class RobotEnv(ArkEnv):
           Return ``(obs, reward, terminated, truncated, info)`` from base env.
         """
         self.steps += 1
+        time.sleep(self.step_sleep)
         return super().step(action)
 
     def terminated_truncated_info(self, state, action, next_state):
@@ -166,13 +170,13 @@ class RobotEnv(ArkEnv):
             target_pos = s[3:6]
 
         distance = np.linalg.norm(cube_pos - target_pos)
-        terminated = bool(distance < 0.1)
+        terminated = bool(distance < 0.2)
 
         if terminated:
             print("Cube is close enough to the target. Terminating episode.")
 
-        truncated = bool(self.steps >= self.max_steps)
-        if truncated:
-            print("Max steps reached. Terminating episode.")
-
+        # truncated = bool(self.steps >= self.max_steps)
+        # if truncated:
+        #     print("Max steps reached. Terminating episode.")
+        truncated = False
         return terminated, truncated, self.steps

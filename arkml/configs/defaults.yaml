@@ -9,6 +9,7 @@ checkpoint: None
 task_prompt: ""
 n_episodes: 10
 max_steps: 500
+step_sleep: 0.5
 
 # Pub-Sub
 channel_type: null

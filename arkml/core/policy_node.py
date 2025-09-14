@@ -6,7 +6,6 @@ from typing import Any
 from torch import nn
 import json
 
-# from ark_frameworkamework.ark.client.comm_infrastructure.base_node import BaseNode
 
 from ark.client.comm_infrastructure.base_node import BaseNode
 

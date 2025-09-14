@@ -1,3 +1,5 @@
+from collections import deque
+
 import numpy as np
 import torch
 from arkml.algos.vla.pizero.models import PiZeroNet
@@ -35,6 +37,10 @@ class PiZeroPolicyNode(PolicyNode):
         self.policy.set_eval_mode()
         self.create_stepper(10, self.step)
 
+        # Inference chunking: number of actions to prefetch from the model when queue is empty
+        self.n_infer_actions = getattr(model_cfg, "pred_horizon", 10)
+        self._action_queue: deque[np.ndarray] = deque()
+
     def predict(self, obs_seq):
         """Compute the action for the given observation batch.
 
@@ -59,13 +65,21 @@ class PiZeroPolicyNode(PolicyNode):
         if "task" in obs_seq:
             obs["task"] = obs_seq["task"]
 
-        with torch.no_grad():
-            action = self.policy.predict(obs)
-        return action.detach().cpu().numpy()[0]
+        # Serve one action per call. If queue is empty, prefetch n actions.
+        if len(self._action_queue) == 0:
+            with torch.no_grad():
+                actions = self.policy.predict_n_actions(
+                    obs, n_actions=self.n_infer_actions
+                )
+            actions_np = actions.detach().cpu().numpy()  # (n, action_dim)
+            for i in range(actions_np.shape[0]):
+                self._action_queue.append(actions_np[i])
+
+        return self._action_queue.popleft()
 
     def publish_action(self, action: np.ndarray):
         """Pack and publish action to downstream consumers."""
-        if action.shape[0] < 8:
+        if action is None or action.shape[0] < 8:
             return
 
         xyz = np.asarray(action[:3], dtype=np.float32)

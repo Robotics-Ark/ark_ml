@@ -1,11 +1,11 @@
-from typing import Any
-import time
 import json
+import time
+from typing import Any
 
 import hydra
 import torch
-
-from arkml.nodes.policy_registry import get_policy_node
+from ark.client.comm_infrastructure.instance_node import InstanceNode
+from arkml.examples.franka_pick_place.franka_pick_place_env import RobotEnv
 from arktypes import (
     task_space_command_t,
     pose_t,
@@ -16,9 +16,7 @@ from arktypes import (
 )
 from arktypes.utils import unpack
 from omegaconf import DictConfig, OmegaConf
-
-from ark.client.comm_infrastructure.instance_node import InstanceNode
-from arkml.examples.franka_pick_place.franka_pick_place_env import RobotEnv
+from tqdm import tqdm
 
 
 def default_channels() -> dict[str, dict[str, type]]:
@@ -51,7 +49,7 @@ class RobotNode(InstanceNode):
       obs_horizon: Number of most recent observations to stack for the policy.
     """
 
-    def __init__(self, env, obs_horizon=8):
+    def __init__(self, env, obs_horizon):
         super().__init__("Robot")
         self.env = env
         self.obs_horizon = obs_horizon
@@ -59,9 +57,10 @@ class RobotNode(InstanceNode):
         self.truncated = None
         self.terminated = None
         self.next_command = None
-        self.obs_pub=self.create_publisher("observation", string_t)
+        self.obs_pub = self.create_publisher("observation", string_t)
         self.create_subscriber("next_action", task_space_command_t, self.callback)
         self.create_stepper(10, self.step)
+        self.current_step = 0
 
     def reset(self):
         """Reset environment and bootstrap observation history.
@@ -71,12 +70,15 @@ class RobotNode(InstanceNode):
         """
         obs, info = self.env.reset()
         self.obs_history = [obs] * self.obs_horizon  # bootstrap with repeated obs
+        self.current_step = 0
+        self.truncated = None
+        self.terminated = None
+        self.next_command = None
         return obs, info
 
     def callback(self, t, channel_name, msg):
         # Convert incoming task-space command into 8D action vector
         name, pos, quat, grip = unpack.task_space_command(msg)
-        # breakpoint()
         self.next_command = [
             float(pos[0]),
             float(pos[1]),
@@ -99,7 +101,7 @@ class RobotNode(InstanceNode):
         """
         if self.next_command is None:
             return
-        obs, reward, self.terminated, self.truncated, info = self.env.step(
+        obs, reward, self.terminated, self.truncated, self.current_step = self.env.step(
             self.next_command
         )
         self.obs_history.append(obs)
@@ -186,7 +188,9 @@ class RobotNode(InstanceNode):
           indicate episode termination status.
         """
         _, _ = self.reset()
-        for _ in range(max_steps):
+        for n_step in tqdm(
+            range(max_steps), desc="Steps:"
+        ):  # TODO Steps count from env is different from steps refered here
             # Prepare current observation batch for the policy
             model_input = self.get_obs_sequence(task_prompt=task_prompt)
 
@@ -203,7 +207,8 @@ class RobotNode(InstanceNode):
                     else None
                 ),
                 "task": model_input.get("task", []),
-                "episode_over": self.terminated or self.truncated
+                "episode_over": (self.terminated or self.truncated)
+                or n_step == max_steps - 1,
             }
             obs_msg = string_t()
             obs_msg.data = json.dumps(payload)
@@ -212,8 +217,9 @@ class RobotNode(InstanceNode):
             # Stepper advances env asynchronously via next_action
             if self.truncated or self.terminated:
                 break
-            time.sleep(step_sleep if step_sleep is not None else 0.1)
+            time.sleep(step_sleep)
 
+        self.truncated = True
         return self.terminated, self.truncated
 
 
@@ -235,25 +241,24 @@ def main(cfg: DictConfig) -> None:
     Returns:
       None. Prints progress and a final success summary to stdout.
     """
-    sim_config = "/Users/abhineetkumar/actml/ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml" # TODO use relative bath
+    sim_config = "./sim_config/global_config.yaml"
     environment_name = "diffusion_env"
 
     print("Config:\n", OmegaConf.to_yaml(cfg))
 
+    step_sleep = float(getattr(cfg, "step_sleep", 0.5))
+
     # Environment
     chans = default_channels()
-
-    env: RobotEnv = RobotEnv(
+    env = RobotEnv(
         config=sim_config,
         environment_name=environment_name,
         action_channels=chans["actions"],
         observation_channels=chans["observations"],
-        max_steps=int(getattr(cfg, "max_steps")),
+        max_steps=int(getattr(cfg, "max_steps")) * 2,
+        step_sleep=step_sleep,
         sim=True,
     )
-
-    # Device
-    device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Robot node to manage history and interaction
     obs_horizon = cfg.algo.model.get("obs_horizon")
@@ -263,6 +268,7 @@ def main(cfg: DictConfig) -> None:
     n_episodes = int(getattr(cfg, "n_episodes"))
 
     success_count = 0
+
     for ep in range(n_episodes):
         print(f"\n=== Episode {ep} ===")
         # Reset policy state between episodes
@@ -271,14 +277,16 @@ def main(cfg: DictConfig) -> None:
             max_steps=int(getattr(cfg, "max_steps")),
             obs_horizon=obs_horizon,
             action_horizon=action_horizon,
-            step_sleep=float(getattr(cfg, "step_sleep", 0.0)),
             task_prompt=cfg.task_prompt,
+            step_sleep=step_sleep,
         )
         if terminated:
             success_count += 1
             print(f"SUCCESS: Episode {ep}")
         else:
             print(f"FAILED: Episode {ep}")
+
+        time.sleep(step_sleep)
 
     print(f"\nTotal successful episodes: {success_count}/{n_episodes}")
 

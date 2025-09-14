@@ -3,7 +3,6 @@ from typing import Callable
 import torch
 from omegaconf import DictConfig
 
-
 # Global registry for policy node builders
 _POLICY_BUILDERS: dict[str, Callable[[DictConfig, torch.device], object]] = {}
 

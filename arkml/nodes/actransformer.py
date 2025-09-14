@@ -1,3 +1,5 @@
+import pdb
+
 import numpy as np
 import torch
 from torchvision import transforms as T
@@ -195,9 +197,14 @@ class ActPolicyNode(PolicyNode):
         episode_over = obs["episode_over"]
 
         if episode_over:
+            breakpoint()
+            print("Episode overdfbvj")
             self.reset()
+
+            print(self.ensembler.sum_buf[:])
             return None
         else:
+
             chunk_pred = self._predict_chunk(image, joints, self.chunk_size)  # (K, action_dim)
 
             actions_to_exec = self.ensembler.step_and_get(
