@@ -197,7 +197,7 @@ class ActPolicyNode(PolicyNode):
         episode_over = obs["episode_over"]
 
         if episode_over:
-            breakpoint()
+
             print("Episode overdfbvj")
             self.reset()
 
@@ -211,7 +211,7 @@ class ActPolicyNode(PolicyNode):
                 new_chunk=chunk_pred,
                 stride=self.action_stride
             )
-            return actions_to_exec
+            return actions_to_exec[0]
 
     # TODO implement
     def publish_action(self, action):

@@ -5,7 +5,6 @@ from pathlib import Path
 
 # Path to your configuration file
 
-# TODO fix
 CONFIG_PATH = str(Path(__file__).parent / "./franka_config/global_config.yaml")
 
 

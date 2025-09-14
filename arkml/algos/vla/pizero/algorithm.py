@@ -12,7 +12,7 @@ from torchvision import transforms
 from .dataset import PiZeroDataset
 from .evaluator import PiZeroEvaluator
 from .trainer import PiZeroTrainer
-from .compute_stats import compute_pizero_stats
+#from .compute_stats import compute_pizero_stats
 
 
 @ALGOS.register("pizero")

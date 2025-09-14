@@ -188,6 +188,7 @@ class RobotNode(InstanceNode):
           indicate episode termination status.
         """
         _, _ = self.reset()
+        time.sleep(2)
         for n_step in tqdm(
             range(max_steps), desc="Steps:"
         ):  # TODO Steps count from env is different from steps refered here
@@ -241,7 +242,7 @@ def main(cfg: DictConfig) -> None:
     Returns:
       None. Prints progress and a final success summary to stdout.
     """
-    sim_config = "./sim_config/global_config.yaml"
+    sim_config = "/Users/abhineetkumar/arkprojects/ark_diffusion_policies_on_franka/diffusion_policy/config/global_config.yaml"
     environment_name = "diffusion_env"
 
     print("Config:\n", OmegaConf.to_yaml(cfg))
