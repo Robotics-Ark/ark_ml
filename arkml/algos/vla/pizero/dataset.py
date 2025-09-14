@@ -31,7 +31,7 @@ class PiZeroDataset(ArkDataset):
         self.task_prompt = kwargs.pop("task_prompt", None)
         if self.task_prompt is None:
             raise ValueError("Missing required keyword 'task_prompt'")
-        self.pred_horizon = 1 #int(kwargs.pop("pred_horizon", 1))
+        self.pred_horizon = 1  # int(kwargs.pop("pred_horizon", 1))
 
         super().__init__(dataset_path)
         self.dataset_path = dataset_path
