@@ -4,10 +4,10 @@ import numpy as np
 from abc import abstractmethod, ABC
 from typing import Any
 from torch import nn
+import json
 
-from ark_framework.ark.client.comm_infrastructure.base_node import BaseNode
 
-# from ark.client.comm_infrastructure.base_node import BaseNode
+from ark.client.comm_infrastructure.base_node import BaseNode
 
 
 class PolicyNode(ABC, BaseNode):
@@ -70,13 +70,26 @@ class PolicyNode(ABC, BaseNode):
 
     def callback(self, t, channel_name, msg):
         """Subscriber callback for new observations."""
-        # Drop old obs if queue is full
+        # Drop old obs
         try:
             self.obs_queue.get_nowait()
         except queue.Empty:
             pass
-        print(f"[NEW OBSERVATION] : {msg}")
-        self.obs_queue.put_nowait(msg)
+
+        if isinstance(msg, str):
+            payload = json.loads(msg)
+        elif hasattr(msg, "data") and isinstance(msg.data, str):
+            payload = json.loads(msg.data)
+        elif isinstance(msg, dict):
+            payload = msg
+        else:
+            raise ValueError("Unsupported observation format")
+
+        if "episode_over" in payload and payload["episode_over"]:
+            self.reset()
+            print("[EPISODE OVER]: Current episode is over")
+        else:
+            self.obs_queue.put_nowait(payload)
 
     def step(self):
         """Stepper loop: publish latest action if available."""
@@ -88,7 +101,7 @@ class PolicyNode(ABC, BaseNode):
 
     def publish_action(self, action: np.ndarray):
         """Publish action message. Subclasses may override for custom packing."""
-        raise NotImplementedError("Subclasses must implement publish_action")
+        ...
 
     @abstractmethod
     def predict(self, obs_seq: dict[str, Any]) -> np.ndarray:

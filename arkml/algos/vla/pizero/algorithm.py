@@ -12,6 +12,7 @@ from torchvision import transforms
 from .dataset import PiZeroDataset
 from .evaluator import PiZeroEvaluator
 from .trainer import PiZeroTrainer
+from .compute_stats import compute_pizero_stats
 
 
 @ALGOS.register("pizero")
@@ -47,7 +48,30 @@ class PiZeroAlgorithm(BaseAlgorithm):
             dataset_path=cfg.data.dataset_path,
             transform=transform,
             task_prompt=cfg.task_prompt,
+            pred_horizon=cfg.algo.model.pred_horizon,
         )
+
+        # Auto-compute dataset stats if missing and bind to model
+        try:
+            from pathlib import Path
+            stats_path_cfg = getattr(cfg.algo.model, "dataset_stats_path", None)
+            stats_path = Path(stats_path_cfg) if stats_path_cfg else None
+            if stats_path is None:
+                # default location next to dataset
+                stats_path = Path(cfg.data.dataset_path) / "pizero_stats.json"
+            if not stats_path.exists():
+                print(f"[PiZeroAlgorithm] Computing dataset stats → {stats_path}")
+                stats = compute_pizero_stats(cfg.data.dataset_path, sample_images_only=True)
+                stats_path.parent.mkdir(parents=True, exist_ok=True)
+                import json
+
+                with open(stats_path, "w") as f:
+                    json.dump({k: {kk: vv.tolist() for kk, vv in d.items()} for k, d in stats.items()}, f, indent=2)
+            # Load stats into normalization buffers
+            if hasattr(self.model, "load_dataset_stats"):
+                self.model.load_dataset_stats(str(stats_path))
+        except Exception as e:
+            print(f"[PiZeroAlgorithm] Warning: failed to ensure dataset stats ({e})")
 
         # Train/val split (80/20)
         total_len = len(dataset)

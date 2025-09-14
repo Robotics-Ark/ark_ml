@@ -1,4 +1,4 @@
-import json
+from collections import deque
 
 import numpy as np
 import torch
@@ -37,6 +37,10 @@ class PiZeroPolicyNode(PolicyNode):
         self.policy.set_eval_mode()
         self.create_stepper(10, self.step)
 
+        # Inference chunking: number of actions to prefetch from the model when queue is empty
+        self.n_infer_actions = getattr(model_cfg, "pred_horizon", 10)
+        self._action_queue: deque[np.ndarray] = deque()
+
     def predict(self, obs_seq):
         """Compute the action for the given observation batch.
 
@@ -51,33 +55,31 @@ class PiZeroPolicyNode(PolicyNode):
         Returns:
           numpy.ndarray: Action vector for the first batch element.
         """
-        # breakpoint()
-        # If observation comes as JSON string_t, convert to model input dict
-        if isinstance(obs_seq, str):
-            payload = json.loads(obs_seq)
-        elif hasattr(obs_seq, "data") and isinstance(obs_seq.data, str):
-            payload = json.loads(obs_seq.data)
-        elif isinstance(obs_seq, dict):
-            payload = obs_seq
-        else:
-            raise ValueError("Unsupported observation format")
 
         # Convert to tensors in the expected shapes
         obs = {}
-        if "image" in payload and payload["image"] is not None:
-            obs["image"] = torch.tensor(payload["image"], dtype=torch.float32)
-        if "state" in payload and payload["state"] is not None:
-            obs["state"] = torch.tensor(payload["state"], dtype=torch.float32)
-        if "task" in payload:
-            obs["task"] = payload["task"]
+        if "image" in obs_seq and obs_seq["image"] is not None:
+            obs["image"] = torch.tensor(obs_seq["image"], dtype=torch.float32)
+        if "state" in obs_seq and obs_seq["state"] is not None:
+            obs["state"] = torch.tensor(obs_seq["state"], dtype=torch.float32)
+        if "task" in obs_seq:
+            obs["task"] = obs_seq["task"]
 
-        with torch.no_grad():
-            action = self.policy.predict(obs)
-        return action.detach().cpu().numpy()[0]
+        # Serve one action per call. If queue is empty, prefetch n actions.
+        if len(self._action_queue) == 0:
+            with torch.no_grad():
+                actions = self.policy.predict_n_actions(
+                    obs, n_actions=self.n_infer_actions
+                )
+            actions_np = actions.detach().cpu().numpy()  # (n, action_dim)
+            for i in range(actions_np.shape[0]):
+                self._action_queue.append(actions_np[i])
+
+        return self._action_queue.popleft()
 
     def publish_action(self, action: np.ndarray):
         """Pack and publish action to downstream consumers."""
-        if action.shape[0] < 8:
+        if action is None or action.shape[0] < 8:
             return
 
         xyz = np.asarray(action[:3], dtype=np.float32)
