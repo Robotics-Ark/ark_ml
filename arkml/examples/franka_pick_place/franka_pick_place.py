@@ -79,6 +79,7 @@ class RobotNode(InstanceNode):
     def callback(self, t, channel_name, msg):
         # Convert incoming task-space command into 8D action vector
         name, pos, quat, grip = unpack.task_space_command(msg)
+        # breakpoint()
         self.next_command = [
             float(pos[0]),
             float(pos[1]),
@@ -242,7 +243,7 @@ def main(cfg: DictConfig) -> None:
     Returns:
       None. Prints progress and a final success summary to stdout.
     """
-    sim_config = "/Users/abhineetkumar/arkprojects/ark_diffusion_policies_on_franka/diffusion_policy/config/global_config.yaml"
+    sim_config = "./sim_config/global_config.yaml"
     environment_name = "diffusion_env"
 
     print("Config:\n", OmegaConf.to_yaml(cfg))

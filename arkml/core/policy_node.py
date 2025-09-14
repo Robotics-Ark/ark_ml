@@ -34,8 +34,7 @@ class PolicyNode(ABC, BaseNode):
 
         # Policy setup
         self.policy = policy
-        # TODO fix this
-        self.policy.to(device=device)
+        self.policy.to_device(device=device)
         self.policy.set_eval_mode()
 
         # Async inference infra
@@ -71,12 +70,11 @@ class PolicyNode(ABC, BaseNode):
 
     def callback(self, t, channel_name, msg):
         """Subscriber callback for new observations."""
-        # Drop old obs if queue is full
+        # Drop old obs
         try:
             self.obs_queue.get_nowait()
         except queue.Empty:
             pass
-        print(f"[NEW OBSERVATION] : {msg}")
 
         if isinstance(msg, str):
             payload = json.loads(msg)
