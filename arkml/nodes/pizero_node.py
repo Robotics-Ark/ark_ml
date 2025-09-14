@@ -41,6 +41,10 @@ class PiZeroPolicyNode(PolicyNode):
         self.n_infer_actions = getattr(model_cfg, "pred_horizon", 10)
         self._action_queue: deque[np.ndarray] = deque()
 
+    def _on_reset(self):
+        """Clear any prefetched actions when an episode ends."""
+        self._action_queue.clear()
+
     def predict(self, obs_seq):
         """Compute the action for the given observation batch.
 
@@ -71,9 +75,9 @@ class PiZeroPolicyNode(PolicyNode):
                 actions = self.policy.predict_n_actions(
                     obs, n_actions=self.n_infer_actions
                 )
-            actions_np = actions.detach().cpu().numpy()  # (n, action_dim)
-            for i in range(actions_np.shape[0]):
-                self._action_queue.append(actions_np[i])
+            actions = actions.detach().cpu().numpy()  # (n, action_dim)
+            for i in range(actions.shape[0]):
+                self._action_queue.append(actions[i])
 
         return self._action_queue.popleft()
 

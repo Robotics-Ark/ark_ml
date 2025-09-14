@@ -2,6 +2,7 @@ import os
 import pickle
 from typing import Any
 
+import numpy as np
 import torch
 from PIL import Image
 from arkml.core.dataset import ArkDataset
@@ -31,8 +32,7 @@ class PiZeroDataset(ArkDataset):
         self.task_prompt = kwargs.pop("task_prompt", None)
         if self.task_prompt is None:
             raise ValueError("Missing required keyword 'task_prompt'")
-        # Number of actions to supervise per sample (matches policy n_action_steps)
-        self.pred_horizon = int(kwargs.pop("pred_horizon", 1))
+        self.pred_horizon = 1 #int(kwargs.pop("pred_horizon", 1))
 
         super().__init__(dataset_path)
         self.dataset_path = dataset_path
@@ -102,7 +102,7 @@ class PiZeroDataset(ArkDataset):
         image = self.transform(image)
 
         # Prepare action sequence of length pred_horizon
-        import numpy as np
+
         raw_action = np.asarray(trajectory["action"], dtype=np.float32)
         if raw_action.ndim == 1:
             act_len, act_dim = 1, raw_action.shape[0]

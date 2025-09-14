@@ -1,10 +1,14 @@
+import json
 import os
+from pathlib import Path
 from typing import Any
 
+import numpy as np
+import torch
 import torch.nn as nn
 from arkml.core.policy import BasePolicy
 from arkml.core.registry import MODELS
-from lerobot.configs.types import FeatureType, PolicyFeature, NormalizationMode
+from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.policies.normalize import Normalize, Unnormalize
 from lerobot.policies.pi0.modeling_pi0 import PI0Policy
 from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
@@ -12,7 +16,7 @@ from torch import tensor
 
 
 @MODELS.register("PiZeroNet")
-class PiZeroNet(BasePolicy, nn.Module):
+class PiZeroNet(BasePolicy):
     """
     VLA PiZero policy wrapper that uses explicit lerobot policies with a switchable type models of that kind.
 
@@ -33,8 +37,6 @@ class PiZeroNet(BasePolicy, nn.Module):
         # LoRA config
         enable_lora: bool = False,
         lora_modules: list = None,
-        # Config
-        pred_horizon: int = 1,
         # Optional dataset stats (LeRobot-compatible)
         dataset_stats_path: str | None = None,
     ):
@@ -61,43 +63,8 @@ class PiZeroNet(BasePolicy, nn.Module):
 
         policy_class = PI0Policy if kind == "pi0" else SmolVLAPolicy
 
-        # Load optional dataset stats for normalization (mean/std etc.)
-        loaded_stats = None
-        if dataset_stats_path:
-            import json
-            from pathlib import Path
-            import numpy as np
+        self._policy = policy_class.from_pretrained(model_path)
 
-            stats_path = Path(dataset_stats_path)
-            if stats_path.exists():
-                with open(stats_path, "r") as f:
-                    raw = json.load(f)
-
-                # Convert lists to numpy arrays as expected by LeRobot Normalize
-                loaded_stats = {
-                    k: {kk: np.array(vv) for kk, vv in d.items()} for k, d in raw.items()
-                }
-
-        try:
-            # Pass stats at construction when available (used by PI0Policy)
-            if kind == "pi0":
-                self._policy = policy_class.from_pretrained(
-                    model_path, dataset_stats=loaded_stats
-                )
-            else:
-                self._policy = policy_class.from_pretrained(model_path)
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to load pretrained {kind} policy '{model_path}': {e}"
-            )
-
-        # TODO need to investigate the policy config
-        # self._policy.config.norm_map = {
-        #     FeatureType.STATE: NormalizationMode.IDENTITY,
-        #     FeatureType.VISUAL: NormalizationMode.IDENTITY,
-        #     FeatureType.ACTION: NormalizationMode.IDENTITY,
-        #     # FeatureType.ACTION: NormalizationMode.MEAN_STD,
-        # }
 
         self._policy.config.input_features = {
             "observation.images.image": PolicyFeature(
@@ -111,41 +78,12 @@ class PiZeroNet(BasePolicy, nn.Module):
             "action": PolicyFeature(type=FeatureType.ACTION, shape=(self.action_dim,)),
         }
 
-        # If stats were provided but policy didn't consume them at construction (e.g., wrappers),
-        # re-initialize normalization modules explicitly to ensure they use our features and stats.
-        if kind == "pi0":
-            from lerobot.policies.normalize import Normalize, Unnormalize
-
-            norm_map = getattr(self._policy.config, "normalization_mapping", None)
-            if norm_map is not None and loaded_stats is not None:
-                self._policy.normalize_inputs = Normalize(
-                    self._policy.config.input_features, norm_map, loaded_stats
-                )
-                # Targets/outputs
-                self._policy.normalize_targets = Normalize(
-                    self._policy.config.output_features, norm_map, loaded_stats
-                )
-                self._policy.unnormalize_outputs = Unnormalize(
-                    self._policy.config.output_features, norm_map, loaded_stats
-                )
-
-        # self._policy.normalize_inputs = Normalize(
-        #     self._policy.config.input_features,
-        #     self._policy.config.norm_map,
-        # )
-        #
-        # self._policy.unnormalize_outputs = Unnormalize(
-        #     self._policy.config.output_features,
-        #     self._policy.config.norm_map,
-        # )
 
         if self.is_lora_enabled:
             raise NotImplementedError("Lora policies not implemented yet to VLA.")
         else:
             for p in self._policy.parameters():
                 p.requires_grad = True
-
-        # self._policy.config.n_action_steps = pred_horizon
 
     def to_device(self, device: str) -> Any:
         """
@@ -182,8 +120,6 @@ class PiZeroNet(BasePolicy, nn.Module):
     def prepare_input(self, observation: dict) -> dict[str, Any]:
         """
         Convert an observation dict into the policy’s expected input format.
-        Moves tensors to `self.device` and maps keys to the feature schema
-        expected by the underlying policy.
 
         Expected keys in `observation`:
             - "image": torch.Tensor of shape (B, C, H, W)
@@ -245,7 +181,6 @@ class PiZeroNet(BasePolicy, nn.Module):
         for _ in range(n_actions):
             actions.append(self._policy.select_action(obs_prep))
         # Stack to (n, action_dim). select_action returns (batch=1, action_dim) or (action_dim)
-        import torch
 
         actions = [a.squeeze(0) if a.dim() == 2 and a.size(0) == 1 else a for a in actions]
         return torch.stack(actions, dim=0)
@@ -320,10 +255,7 @@ class PiZeroNet(BasePolicy, nn.Module):
             dataset_stats_path: Path to a JSON file containing LeRobot-compatible stats
                 for keys like 'observation.state', 'observation.images.image', 'action'.
         """
-        import json
-        import numpy as np
-        from pathlib import Path
-        from lerobot.policies.normalize import Normalize, Unnormalize
+
 
         stats_path = Path(dataset_stats_path)
         if not stats_path.exists():
