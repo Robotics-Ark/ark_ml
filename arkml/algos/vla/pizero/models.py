@@ -12,7 +12,7 @@ from torch import tensor
 
 
 @MODELS.register("PiZeroNet")
-class PiZeroNet(BasePolicy, nn.Module):
+class PiZeroNet(BasePolicy):
     """
     VLA PiZero policy wrapper that uses explicit lerobot policies with a switchable type models of that kind.
 

@@ -1,8 +1,10 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
+from torch import nn
 
-class BasePolicy(ABC):
+
+class BasePolicy(ABC, nn.Module):
     """
     Abstract base class defining the minimal interface for a policy.
     """

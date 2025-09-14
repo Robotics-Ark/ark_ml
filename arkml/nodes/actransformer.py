@@ -13,6 +13,7 @@ from arkml.core.policy_node import PolicyNode
 import numpy as np
 from PIL import Image
 
+
 def coerce_len1_len3_image(x):
     """
     Accepts images shaped like:
@@ -45,7 +46,7 @@ def coerce_len1_len3_image(x):
 
     # If grayscale (H,W), promote to 3 channels
     if img.ndim == 2:
-        img = np.stack([img]*3, axis=-1)
+        img = np.stack([img] * 3, axis=-1)
 
     # Ensure uint8 in [0,255]
     if img.dtype != np.uint8:
@@ -75,16 +76,23 @@ class TemporalEnsembler:
             self.sum_buf[-stride:] = 0.0
             self.cnt_buf[-stride:] = 0.0
 
-
         self.sum_buf[:K] += new_chunk
         self.cnt_buf[:K] += 1.0
-
 
         smoothed = self.sum_buf / np.maximum(self.cnt_buf[:, None], 1.0)
         return smoothed[:stride]
 
+
 class ActPolicyNode(PolicyNode):
-    def __init__(self, model_cfg, device="cpu", chunk_size=50, action_stride=1, image_size=256, global_config=None):
+    def __init__(
+        self,
+        model_cfg,
+        device="cpu",
+        chunk_size=50,
+        action_stride=1,
+        image_size=256,
+        global_config=None,
+    ):
         """
         Returns `actions_to_exec` from predict()
         """
@@ -112,32 +120,38 @@ class ActPolicyNode(PolicyNode):
         ckpt = torch.load(CKPT_PATH, map_location=device)
         policy.load_state_dict(ckpt["model"])
 
-
         self.chunk_size = int(chunk_size)
         self.action_stride = int(action_stride)
         self.image_size = int(image_size)
         self.action_dim = int(model_cfg.action_dim)
         self.device = device
 
-        self.to_tensor = T.Compose([
-            T.ToTensor(),
-            T.Resize((self.image_size, self.image_size), antialias=True),
-        ])
-
+        self.to_tensor = T.Compose(
+            [
+                T.ToTensor(),
+                T.Resize((self.image_size, self.image_size), antialias=True),
+            ]
+        )
 
         self.ensembler = TemporalEnsembler(self.chunk_size, self.action_dim)
 
-    def reset(self):
-        """Call at the start of an episode"""
+    # def reset(self):
+    #     """Call at the start of an episode"""
+    #     self.ensembler.sum_buf[:] = 0.0
+    #     self.ensembler.cnt_buf[:] = 0.0
+
+    def _on_reset(self):
+        """Clear any prefetched actions when an episode ends."""
         self.ensembler.sum_buf[:] = 0.0
         self.ensembler.cnt_buf[:] = 0.0
+
 
     @staticmethod
     def _build_joint_state(obs):
         # cube(3) + target(3) + gripper(1) + franka_ee(3) = 10
-        cube      = np.asarray(obs["cube"]).reshape(-1)
-        target    = np.asarray(obs["target"]).reshape(-1)
-        gripper   = np.asarray(obs["gripper"]).reshape(-1)
+        cube = np.asarray(obs["cube"]).reshape(-1)
+        target = np.asarray(obs["target"]).reshape(-1)
+        gripper = np.asarray(obs["gripper"]).reshape(-1)
         franka_ee = np.asarray(obs["franka_ee"][0]).reshape(-1)
         vec = np.concatenate([cube, target, gripper, franka_ee], axis=0)
         if vec.shape[0] != 10:
@@ -181,42 +195,33 @@ class ActPolicyNode(PolicyNode):
 
         img_t = img_t.to(self.device)
 
-        j_t   = torch.tensor(joints_t[0]).unsqueeze(0).to(self.device)                  # (1,10)
+        j_t = torch.tensor(joints_t[0]).unsqueeze(0).to(self.device)  # (1,10)
 
-        memory = self.policy.build_memory(img_t, j_t, z_zero)          # (1, N_ctx, d)
-        pred   = self.policy.decode_actions(memory, K)                 # (1,K,action_dim)
-        return pred.squeeze(0).cpu().numpy()                          # (K,action_dim)
+        memory = self.policy.build_memory(img_t, j_t, z_zero)  # (1, N_ctx, d)
+        pred = self.policy.decode_actions(memory, K)  # (1,K,action_dim)
+        return pred.squeeze(0).cpu().numpy()  # (K,action_dim)
 
     @torch.no_grad()
     def predict(self, obs):
         """
         Returns: actions_to_exec (shape: (action_stride, action_dim))
         """
-        joints = obs['state']
-        image  = obs['image']
-        episode_over = obs["episode_over"]
+        joints = obs["state"]
+        image = obs["image"]
 
-        if episode_over:
+        chunk_pred = self._predict_chunk(
+            image, joints, self.chunk_size
+        )  # (K, action_dim)
 
-            print("Episode overdfbvj")
-            self.reset()
-
-            print(self.ensembler.sum_buf[:])
-            return None
-        else:
-
-            chunk_pred = self._predict_chunk(image, joints, self.chunk_size)  # (K, action_dim)
-
-            actions_to_exec = self.ensembler.step_and_get(
-                new_chunk=chunk_pred,
-                stride=self.action_stride
-            )
-            return actions_to_exec[0]
+        actions_to_exec = self.ensembler.step_and_get(
+            new_chunk=chunk_pred, stride=self.action_stride
+        )
+        return actions_to_exec[0]
 
     # TODO implement
     def publish_action(self, action):
         """Pack and publish action to downstream consumers."""
-        if action.shape[0] < 8:
+        if action is None or action.shape[0] < 8:
             return
 
         xyz = np.asarray(action[:3], dtype=np.float32)

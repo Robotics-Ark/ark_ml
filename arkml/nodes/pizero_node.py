@@ -35,11 +35,14 @@ class PiZeroPolicyNode(PolicyNode):
         self.policy.to_device(device)
         self.policy.reset()
         self.policy.set_eval_mode()
-        self.create_stepper(10, self.step)
 
         # Inference chunking: number of actions to prefetch from the model when queue is empty
         self.n_infer_actions = getattr(model_cfg, "pred_horizon", 10)
         self._action_queue: deque[np.ndarray] = deque()
+
+    def _on_reset(self):
+        """Clear any prefetched actions when an episode ends."""
+        self._action_queue.clear()
 
     def predict(self, obs_seq):
         """Compute the action for the given observation batch.

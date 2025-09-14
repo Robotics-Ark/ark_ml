@@ -65,8 +65,13 @@ class PolicyNode(ABC, BaseNode):
         """Reset the internal state of the policy."""
         self.policy.reset()
         self.latest_action = None
+        # Clear any queued observations
         with self.obs_queue.mutex:
             self.obs_queue.queue.clear()
+        # Allow subclasses to clear their own buffers
+        reset_hook = getattr(self, "_on_reset", None)
+        if callable(reset_hook):
+            reset_hook()
 
     def callback(self, t, channel_name, msg):
         """Subscriber callback for new observations."""

@@ -1,5 +1,5 @@
+import asyncio
 import json
-import time
 from typing import Any
 
 import hydra
@@ -61,6 +61,7 @@ class RobotNode(InstanceNode):
         self.create_subscriber("next_action", task_space_command_t, self.callback)
         self.create_stepper(10, self.step)
         self.current_step = 0
+        self.episode_started = False
 
     def reset(self):
         """Reset environment and bootstrap observation history.
@@ -74,12 +75,12 @@ class RobotNode(InstanceNode):
         self.truncated = None
         self.terminated = None
         self.next_command = None
+        self.episode_started = False
         return obs, info
 
     def callback(self, t, channel_name, msg):
         # Convert incoming task-space command into 8D action vector
         name, pos, quat, grip = unpack.task_space_command(msg)
-        # breakpoint()
         self.next_command = [
             float(pos[0]),
             float(pos[1]),
@@ -100,7 +101,7 @@ class RobotNode(InstanceNode):
         Returns:
           ``(obs, reward, terminated, truncated, info)`` from the env.
         """
-        if self.next_command is None:
+        if self.next_command is None or not self.episode_started:
             return
         obs, reward, self.terminated, self.truncated, self.current_step = self.env.step(
             self.next_command
@@ -165,7 +166,7 @@ class RobotNode(InstanceNode):
         obs["task"] = [task_prompt] * obs["state"].shape[0]
         return obs
 
-    def run_episode(
+    async def run_episode(
         self,
         max_steps: int,
         obs_horizon: int,
@@ -189,13 +190,13 @@ class RobotNode(InstanceNode):
           indicate episode termination status.
         """
         _, _ = self.reset()
-        time.sleep(2)
+        await asyncio.sleep(10)
         for n_step in tqdm(
             range(max_steps), desc="Steps:"
         ):  # TODO Steps count from env is different from steps refered here
             # Prepare current observation batch for the policy
             model_input = self.get_obs_sequence(task_prompt=task_prompt)
-
+            self.truncated = n_step == max_steps - 1
             # Serialize observation to JSON (lists) and publish on generic channel
             payload = {
                 "image": (
@@ -209,20 +210,45 @@ class RobotNode(InstanceNode):
                     else None
                 ),
                 "task": model_input.get("task", []),
-                "episode_over": (self.terminated or self.truncated)
-                or n_step == max_steps - 1,
+                "episode_over": (self.terminated or self.truncated),
             }
             obs_msg = string_t()
             obs_msg.data = json.dumps(payload)
             self.obs_pub.publish(obs_msg)
+            if n_step == 0:
+                self.episode_started = True
 
             # Stepper advances env asynchronously via next_action
             if self.truncated or self.terminated:
                 break
-            time.sleep(step_sleep)
 
         self.truncated = True
+        self.episode_started = False
         return self.terminated, self.truncated
+
+
+async def run_all_episodes(robot_node, cfg, obs_horizon, action_horizon, step_sleep):
+    n_episodes = int(getattr(cfg, "n_episodes"))
+    success_count = 0
+
+    for ep in range(n_episodes):
+        print(f"\n=== Episode {ep} ===")
+        terminated, truncated = await robot_node.run_episode(
+            max_steps=int(getattr(cfg, "max_steps")),
+            obs_horizon=obs_horizon,
+            action_horizon=action_horizon,
+            task_prompt=cfg.task_prompt,
+            step_sleep=step_sleep,
+        )
+        if terminated:
+            success_count += 1
+            print(f"SUCCESS: Episode {ep}")
+        else:
+            print(f"FAILED: Episode {ep}")
+
+        await asyncio.sleep(step_sleep)
+
+    print(f"\nTotal successful episodes: {success_count}/{n_episodes}")
 
 
 @hydra.main(
@@ -267,30 +293,9 @@ def main(cfg: DictConfig) -> None:
     action_horizon = cfg.algo.model.get("action_horizon")
     robot_node = RobotNode(env=env, obs_horizon=obs_horizon)
 
-    n_episodes = int(getattr(cfg, "n_episodes"))
-
-    success_count = 0
-
-    for ep in range(n_episodes):
-        print(f"\n=== Episode {ep} ===")
-        # Reset policy state between episodes
-
-        terminated, truncated = robot_node.run_episode(
-            max_steps=int(getattr(cfg, "max_steps")),
-            obs_horizon=obs_horizon,
-            action_horizon=action_horizon,
-            task_prompt=cfg.task_prompt,
-            step_sleep=step_sleep,
-        )
-        if terminated:
-            success_count += 1
-            print(f"SUCCESS: Episode {ep}")
-        else:
-            print(f"FAILED: Episode {ep}")
-
-        time.sleep(step_sleep)
-
-    print(f"\nTotal successful episodes: {success_count}/{n_episodes}")
+    asyncio.run(
+        run_all_episodes(robot_node, cfg, obs_horizon, action_horizon, step_sleep)
+    )
 
 
 if __name__ == "__main__":

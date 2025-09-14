@@ -1,9 +1,10 @@
-import torch
-import torch.nn as nn
-from torchvision.models import resnet18, ResNet18_Weights
 from typing import Any
 
+import torch
+import torch.nn as nn
+from arkml.core.policy import BasePolicy
 from arkml.core.registry import MODELS
+from torchvision.models import resnet18, ResNet18_Weights
 
 
 def sinusoid_1d(length, dim, device, dtype=torch.float32):
@@ -77,7 +78,7 @@ class ResNet18Tokens(nn.Module):
 
 
 @MODELS.register("ACTransformer")
-class ACT(nn.Module):
+class ACT(BasePolicy):
 
     def __init__(
         self,
@@ -196,18 +197,25 @@ class ACT(nn.Module):
             PiZeroNet: This instance, for method chaining.
 
         """
+        self.to(device)
+
+    def reset(self):
         pass
 
     def set_eval_mode(self) -> None:
         """
         Set the underlying policy to evaluation mode.
         """
-        pass
+
+        self.eval()
 
     def set_train_mode(self) -> None:
         """
         Set the underlying policy to training mode.
         """
+        self.train()
+
+    def predict(self):
         pass
 
     # ----- Build observation memory -----
