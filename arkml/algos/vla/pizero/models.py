@@ -85,6 +85,8 @@ class PiZeroNet(BasePolicy):
             for p in self._policy.parameters():
                 p.requires_grad = True
 
+        self._policy.config.n_action_steps = 1
+
     def to_device(self, device: str) -> Any:
         """
         Move the underlying policy to a device and return self.
