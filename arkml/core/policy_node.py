@@ -87,7 +87,11 @@ class PolicyNode(ABC, BaseNode):
         else:
             raise ValueError("Unsupported observation format")
 
-        self.obs_queue.put_nowait(payload)
+        if "episode_over" in payload and payload["episode_over"]:
+            self.reset()
+            print("[EPISODE OVER]: Current episode is over")
+        else:
+            self.obs_queue.put_nowait(payload)
 
     def step(self):
         """Stepper loop: publish latest action if available."""
@@ -99,7 +103,7 @@ class PolicyNode(ABC, BaseNode):
 
     def publish_action(self, action: np.ndarray):
         """Publish action message. Subclasses may override for custom packing."""
-        raise NotImplementedError("Subclasses must implement publish_action")
+        ...
 
     @abstractmethod
     def predict(self, obs_seq: dict[str, Any]) -> np.ndarray:
