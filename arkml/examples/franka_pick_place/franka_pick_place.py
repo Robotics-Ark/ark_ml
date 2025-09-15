@@ -30,7 +30,9 @@ def default_channels() -> dict[str, dict[str, type]]:
     return {"actions": action_channels, "observations": observation_channels}
 
 
-def reset_scene(sim_config: str, environment_name: str, max_steps: int, step_sleep: float) -> None:
+def reset_scene(
+    sim_config: str, environment_name: str, max_steps: int, step_sleep: float
+) -> None:
     """Minimal scene bootstrap: reset objects and exit.
 
     This script no longer bridges observations/actions. The PolicyNode handles
@@ -46,7 +48,7 @@ def reset_scene(sim_config: str, environment_name: str, max_steps: int, step_sle
         step_sleep=step_sleep,
         sim=True,
     )
-    env.reset_objects()
+    env.reset()
 
     # Reset the policy node state at the beginning of the episode
     try:

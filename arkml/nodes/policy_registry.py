@@ -74,7 +74,7 @@ def _build_pizero(cfg: DictConfig, device: torch.device, stepper_frequency:int, 
       Configured PiZeroPolicyNode  instance.
     """
     from arkml.nodes.pizero_node import PiZeroPolicyNode
-    return PiZeroPolicyNode(model_cfg=cfg, device=device, stepper_frequency=stepper_frequency, channel_config=channel_config)
+    return PiZeroPolicyNode(model_cfg=cfg.algo.model, device=device, stepper_frequency=stepper_frequency, channel_config=channel_config)
 
 
 @register_policy("smolvla")
