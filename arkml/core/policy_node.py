@@ -1,7 +1,7 @@
 import importlib
-import json
 import queue
 import threading
+import time
 from abc import abstractmethod, ABC
 from pathlib import Path
 from typing import Any
@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 import yaml
 from ark.client.comm_infrastructure.base_node import BaseNode
+from ark.env.spaces import ActionSpace, ObservationSpace
 from ark.tools.log import log
 from arktypes import flag_t
 from arktypes.utils import pack, unpack
@@ -43,29 +44,33 @@ class PolicyNode(ABC, BaseNode):
                 f"Config file could not found {channel_config_path}"
             )
         observation_channels = cfg_dict.get("observation_channels", {})
+        action_channels = cfg_dict.get("action_channels", {})
         self.obs_keys = list(observation_channels.keys())
 
         obs_channels = self._resolve_channel_types(observation_channels)
 
-        act_channels = self._resolve_channel_types(cfg_dict.get("action_channels", {}))
+        act_channels = self._resolve_channel_types(action_channels)
 
-        if obs_channels:
-            self.obs_listener = self.create_multi_channel_listener(obs_channels)
-        else:
+        if not obs_channels:
             raise NotImplementedError("No observation channels found")
 
-        if act_channels:
-            self.action_pub = self.create_multi_channel_publisher(act_channels)
-        else:
+        if not act_channels:
             raise NotImplementedError("No action channels found")
+
+        self.action_space = ActionSpace(act_channels, self.action_packing, self._lcm)
+        self.observation_space = ObservationSpace(
+            obs_channels, self.observation_unpacking, self._lcm
+        )
+
+        self._multi_comm_handlers.append(self.action_space.action_space_publisher)
+        self._multi_comm_handlers.append(
+            self.observation_space.observation_space_listener
+        )
 
         # Policy setup
         self.policy = policy
         self.policy.to_device(device=device)
         self.policy.set_eval_mode()
-
-        # Async inference infra
-        self.obs_queue = queue.Queue(maxsize=1)  # only keep latest obs
         self.latest_action = None
         self._stop_event = threading.Event()
 
@@ -77,7 +82,7 @@ class PolicyNode(ABC, BaseNode):
         # Stepper publishes actions at fixed control frequency
         self.create_stepper(stepper_frequency, self.step)
 
-        # Expose a reset service so external clients can reset policy state
+        # Reset service to reset policy state
         self._reset_service_name = f"{self.name}/policy/reset"
         self.create_service(
             self._reset_service_name, flag_t, flag_t, self._callback_reset_service
@@ -86,22 +91,17 @@ class PolicyNode(ABC, BaseNode):
     def _inference_worker(self):
         """Background thread to run model inference asynchronously."""
         while not self._stop_event.is_set():
-            # Poll latest messages across all observation channels
-            obs_dict = self.obs_listener.get()
-
-            if not obs_dict or any(v is None for v in obs_dict.values()):
-                # Incomplete observation set; try again shortly
-                continue
-            obs = self.observation_unpacking(observation_dict=obs_dict)
-            action = self.predict(obs)
-            self.latest_action = action
+            self.observation_space.wait_until_observation_space_is_ready()
+            obs = self.observation_space.get_observation()
+            if obs is not None:
+                action = self.predict(obs)
+                log.info(f"[ACTION PREDICTED] : {action}")
+                self.latest_action = action
 
     def reset(self) -> None:
         """Reset the internal state of the policy."""
         self.policy.reset()
         self.latest_action = None
-        with self.obs_queue.mutex:
-            self.obs_queue.queue.clear()
         # Allow subclasses to clear their own buffers
         reset_hook = getattr(self, "_on_reset", None)
         if callable(reset_hook):
@@ -117,38 +117,17 @@ class PolicyNode(ABC, BaseNode):
         self.suspend_communications(services=False)
         try:
             self.reset()
+            time.sleep(5)
+            self.observation_space.wait_until_observation_space_is_ready()
+            _ = self.observation_space.get_observation()
         finally:
             self.resume_communications(services=False)
         return flag_t()
-
-    def callback(self, t, channel_name, msg):
-        """Subscriber callback for new observations."""
-        # Drop old obs
-        try:
-            self.obs_queue.get_nowait()
-        except queue.Empty:
-            pass
-
-        if isinstance(msg, str):
-            payload = json.loads(msg)
-        elif hasattr(msg, "data") and isinstance(msg.data, str):
-            payload = json.loads(msg.data)
-        elif isinstance(msg, dict):
-            payload = msg
-        else:
-            raise ValueError("Unsupported observation format")
-
-        if "episode_over" in payload and payload["episode_over"]:
-            self.reset()
-            log.info("[EPISODE OVER]: Current episode is over")
-        else:
-            self.obs_queue.put_nowait(payload)
 
     def step(self):
         """Stepper loop: publish latest action if available."""
         if self.latest_action is None:
             return
-        log.info(f"[ACTION PREDICTED] : {self.latest_action}")
         self.publish_action(self.latest_action)
         self.latest_action = None
 
@@ -157,12 +136,7 @@ class PolicyNode(ABC, BaseNode):
         if action is None or action.shape[0] < 8:
             return
 
-        xyz = np.asarray(action[:3], dtype=np.float32)
-        quat = np.asarray(action[3:7], dtype=np.float32)
-        grip = float(action[7])
-        msg = pack.task_space_command("all", xyz, quat, grip)
-
-        self.action_pub.publish({"nex_action": msg})
+        self.action_space.pack_and_publish(action)
 
     @abstractmethod
     def predict(self, obs_seq: dict[str, Any]) -> np.ndarray:
@@ -205,6 +179,9 @@ class PolicyNode(ABC, BaseNode):
         Returns:
           dict: Structured observation dictionary as described above.
         """
+
+        if not observation_dict or any(v is None for v in observation_dict.values()):
+            return None
         cube_state = observation_dict[self.obs_keys[0]]
         target_state = observation_dict[self.obs_keys[1]]
         joint_state = observation_dict[self.obs_keys[2]]
@@ -227,3 +204,27 @@ class PolicyNode(ABC, BaseNode):
             "franka_ee": (franka_ee_position, franka_ee_orientation),
             "images": (rgb, depth),
         }
+
+    @staticmethod
+    def action_packing(action: list) -> dict[str, Any]:
+        """Pack action into Ark cartesian command message.
+
+        Expects an 8D vector representing end-effector position, orientation
+        quaternion, and gripper command in the following order:
+        ``[x, y, z, qx, qy, qz, qw, gripper]``.
+
+        Args:
+          action: List describing the cartesian command.
+
+        Returns:
+          dict[str, ...]: Mapping with key pointing to a packed Ark message.
+        """
+
+        xyz_command = np.array(action[:3])
+        quaternion_command = np.array(action[3:7])
+        gripper_command = action[7]
+
+        franka_cartesian_command = pack.task_space_command(
+            "all", xyz_command, quaternion_command, gripper_command
+        )
+        return {"franka/cartesian_command/sim": franka_cartesian_command}
