@@ -4,7 +4,7 @@ import torch
 from omegaconf import DictConfig
 
 # Global registry for policy node builders
-_POLICY_BUILDERS: dict[str, Callable[[DictConfig, torch.device], object]] = {}
+_POLICY_BUILDERS: dict[str, Callable[[DictConfig, torch.device, int, str], object]] = {}
 
 
 def register_policy(key: str):
@@ -56,12 +56,14 @@ def get_policy_node(cfg: DictConfig, device: torch.device):
         raise NotImplementedError(
             f"No policy builder registered for key '{key}'. Available: {list(_POLICY_BUILDERS.keys())}"
         )
-    return builder(cfg, device)
+    # Optional channel_config path may be provided in Hydra defaults.yaml
+    channel_config = getattr(cfg, "channel_config", None)
+    return builder(cfg, device, cfg.stepper_frequency, channel_config)
 
 
 @register_policy("pizero")
 @register_policy("pi0")
-def _build_pizero(cfg: DictConfig, device: torch.device):
+def _build_pizero(cfg: DictConfig, device: torch.device, stepper_frequency:int, channel_config: str | None = None):
     """Build and return a PiZero policy node from config.
 
     Args:
@@ -72,10 +74,10 @@ def _build_pizero(cfg: DictConfig, device: torch.device):
       Configured PiZeroPolicyNode  instance.
     """
     from arkml.nodes.pizero_node import PiZeroPolicyNode
-    return PiZeroPolicyNode(model_cfg=cfg.algo.model, device=str(device))
+    return PiZeroPolicyNode(model_cfg=cfg, device=device, stepper_frequency=stepper_frequency, channel_config=channel_config)
 
 
 @register_policy("smolvla")
-def _build_smolvla(cfg: DictConfig, device: torch.device):
+def _build_smolvla(cfg: DictConfig, device: torch.device, stepper_frequency, channel_config: str | None = None):
     """Build and return SmolVLA that reuses the PiZero builder."""
-    return _build_pizero(cfg, device)
+    return _build_pizero(model_cfg=cfg, device=device, stepper_frequency=stepper_frequency, channel_config=channel_config)

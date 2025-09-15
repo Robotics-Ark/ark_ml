@@ -9,6 +9,7 @@ from omegaconf import DictConfig
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 
+from pathlib import Path
 from .dataset import PiZeroDataset
 from .evaluator import PiZeroEvaluator
 from .trainer import PiZeroTrainer
@@ -53,7 +54,6 @@ class PiZeroAlgorithm(BaseAlgorithm):
 
         # Auto-compute dataset stats if missing and bind to model
         try:
-            from pathlib import Path
             stats_path_cfg = getattr(cfg.algo.model, "dataset_stats_path", None)
             stats_path = Path(stats_path_cfg) if stats_path_cfg else None
             if stats_path is None:

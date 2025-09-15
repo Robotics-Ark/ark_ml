@@ -16,7 +16,7 @@ class PiZeroPolicyNode(PolicyNode):
       device: Target device string (e.g., ``"cuda"`` or ``"cpu"``).
     """
 
-    def __init__(self, model_cfg, device="cuda", global_config=None):
+    def __init__(self, model_cfg, device:str, stepper_frequency:int, global_config=None, channel_config: str | None = None):
         policy = PiZeroNet(
             policy_type=model_cfg.policy_type,
             model_path=model_cfg.model_path,
@@ -27,9 +27,9 @@ class PiZeroPolicyNode(PolicyNode):
         super().__init__(
             policy=policy,
             device=device,
-            channel_type=string_t,
-            message_type=task_space_command_t,
+            stepper_frequency=stepper_frequency,
             global_config=global_config,
+            channel_config_path=channel_config,
         )
 
         self.policy.to_device(device)
@@ -81,13 +81,18 @@ class PiZeroPolicyNode(PolicyNode):
 
         return self._action_queue.popleft()
 
-    def publish_action(self, action: np.ndarray):
-        """Pack and publish action to downstream consumers."""
-        if action is None or action.shape[0] < 8:
-            return
-
-        xyz = np.asarray(action[:3], dtype=np.float32)
-        quat = np.asarray(action[3:7], dtype=np.float32)
-        grip = float(action[7])
-        msg = pack.task_space_command("next_action", xyz, quat, grip)
-        self.pub.publish(msg)
+    # def publish_action(self, action: np.ndarray):
+    #     """Pack and publish action to downstream consumers."""
+    #     if action is None or action.shape[0] < 8:
+    #         return
+    #
+    #     xyz = np.asarray(action[:3], dtype=np.float32)
+    #     quat = np.asarray(action[3:7], dtype=np.float32)
+    #     grip = float(action[7])
+    #     msg = pack.task_space_command("all", xyz, quat, grip)
+    #
+    #     # Prefer multi-channel publisher if configured
+    #     if getattr(self, "action_pub", None) is not None:
+    #         self.action_pub.publish({"nex_action": msg})
+    #     else:
+    #         self.pub.publish(msg)

@@ -11,6 +11,9 @@ n_episodes: 1
 max_steps: 500
 step_sleep: 0.1
 
+# Policy Config
+stepper_frequency: 5
+
 # Pub-Sub
-channel_type: null
-message_type: null
+# Default channel config file used by PolicyNode. Override via CLI if needed.
+channel_config: "examples/franka_pick_place/policy_channels.yaml"
