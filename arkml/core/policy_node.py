@@ -46,6 +46,7 @@ class PolicyNode(ABC, BaseNode):
         observation_channels = cfg_dict.get("observation_channels", {})
         action_channels = cfg_dict.get("action_channels", {})
         self.obs_keys = list(observation_channels.keys())
+        self.action_keys = list(action_channels.keys())
 
         obs_channels = self._resolve_channel_types(observation_channels)
 
@@ -114,7 +115,6 @@ class PolicyNode(ABC, BaseNode):
             _ = self.observation_space.get_observation()
         finally:
             self.resume_communications(services=False)
-
 
     def _callback_reset_service(self, channel, msg):
         """Service callback to reset policy state.
@@ -207,8 +207,7 @@ class PolicyNode(ABC, BaseNode):
             "images": (rgb, depth),
         }
 
-    @staticmethod
-    def action_packing(action: list) -> dict[str, Any]:
+    def action_packing(self, action: list) -> dict[str, Any]:
         """Pack action into Ark cartesian command message.
 
         Expects an 8D vector representing end-effector position, orientation
@@ -229,4 +228,4 @@ class PolicyNode(ABC, BaseNode):
         franka_cartesian_command = pack.task_space_command(
             "all", xyz_command, quaternion_command, gripper_command
         )
-        return {"franka/cartesian_command/sim": franka_cartesian_command}
+        return {self.action_keys[0]: franka_cartesian_command}
