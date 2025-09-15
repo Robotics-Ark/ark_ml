@@ -74,9 +74,9 @@ class PiZeroPolicyNode(PolicyNode):
                 actions = self.policy.predict_n_actions(
                     obs, n_actions=self.n_infer_actions
                 )
-            actions_np = actions.detach().cpu().numpy()  # (n, action_dim)
-            for i in range(actions_np.shape[0]):
-                self._action_queue.append(actions_np[i])
+            actions = actions.detach().cpu().numpy()  # (n, action_dim)
+            for i in range(actions.shape[0]):
+                self._action_queue.append(actions[i])
 
         return self._action_queue.popleft()
 

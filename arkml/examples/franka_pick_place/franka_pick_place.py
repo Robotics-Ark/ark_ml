@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from typing import Any
 
 import hydra
@@ -58,7 +59,9 @@ class RobotNode(InstanceNode):
         self.terminated = None
         self.next_command = None
         self.obs_pub = self.create_publisher("observation", string_t)
-        self.create_subscriber("next_action", task_space_command_t, self.callback)
+        self.action_sub = self.create_subscriber(
+            "next_action", task_space_command_t, self.callback
+        )
         self.create_stepper(10, self.step)
         self.current_step = 0
         self.episode_started = False
@@ -76,6 +79,9 @@ class RobotNode(InstanceNode):
         self.terminated = None
         self.next_command = None
         self.episode_started = False
+        self.action_sub.suspend()
+        time.sleep(0.1)
+        self.action_sub.restart()
         return obs, info
 
     def callback(self, t, channel_name, msg):
@@ -269,7 +275,7 @@ def main(cfg: DictConfig) -> None:
     Returns:
       None. Prints progress and a final success summary to stdout.
     """
-    sim_config = "/Users/abhineetkumar/arkprojects/ark_diffusion_policies_on_franka/diffusion_policy/config/global_config.yaml"
+    sim_config = "./sim_config/global_config.yaml"
     environment_name = "diffusion_env"
 
     print("Config:\n", OmegaConf.to_yaml(cfg))

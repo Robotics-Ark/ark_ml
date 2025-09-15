@@ -31,8 +31,7 @@ class PiZeroDataset(ArkDataset):
         self.task_prompt = kwargs.pop("task_prompt", None)
         if self.task_prompt is None:
             raise ValueError("Missing required keyword 'task_prompt'")
-        # Number of actions to supervise per sample (matches policy n_action_steps)
-        self.pred_horizon = int(kwargs.pop("pred_horizon", 1))
+        self.pred_horizon = 1  # int(kwargs.pop("pred_horizon", 1))
 
         super().__init__(dataset_path)
         self.dataset_path = dataset_path
@@ -101,33 +100,12 @@ class PiZeroDataset(ArkDataset):
         image = Image.fromarray(trajectory["state"][10])
         image = self.transform(image)
 
-        # Prepare action sequence of length pred_horizon
-        import numpy as np
-        raw_action = np.asarray(trajectory["action"], dtype=np.float32)
-        if raw_action.ndim == 1:
-            act_len, act_dim = 1, raw_action.shape[0]
-            actions = np.zeros((self.pred_horizon, act_dim), dtype=np.float32)
-            actions[0] = raw_action
-            action_is_pad = np.ones((self.pred_horizon,), dtype=bool)
-            action_is_pad[0] = False
-        elif raw_action.ndim == 2:
-            act_len, act_dim = raw_action.shape
-            if act_len >= self.pred_horizon:
-                actions = raw_action[: self.pred_horizon]
-                action_is_pad = np.zeros((self.pred_horizon,), dtype=bool)
-            else:
-                actions = np.zeros((self.pred_horizon, act_dim), dtype=np.float32)
-                actions[:act_len] = raw_action
-                action_is_pad = np.zeros((self.pred_horizon,), dtype=bool)
-                action_is_pad[act_len:] = True
-        else:
-            raise ValueError("trajectory['action'] must be 1D or 2D array")
-
         obs = {
             "image": image,
             "state": torch.tensor(trajectory["state"][:10], dtype=torch.float),
-            "action": torch.from_numpy(actions),
-            "action_is_pad": torch.from_numpy(action_is_pad),
+            "action": torch.tensor(trajectory["action"], dtype=torch.float).unsqueeze(
+                0
+            ),
             "task": self.task_prompt,
         }
 
