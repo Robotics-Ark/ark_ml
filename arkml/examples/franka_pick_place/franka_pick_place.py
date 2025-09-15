@@ -14,6 +14,7 @@ from arktypes import (
 )
 from arktypes.utils import unpack
 from omegaconf import DictConfig, OmegaConf
+from tqdm import tqdm
 
 
 def default_channels() -> dict[str, dict[str, type]]:
@@ -69,7 +70,9 @@ class RobotNode(ArkEnv):
         """!Evaluate episode status."""
         return False, False, None
 
-    def reward(self, state: Any, action: Any, next_state: Any) -> float: ...
+    def reward(self, state: Any, action: Any, next_state: Any) -> float:
+        """Compute the reward for a transition"""
+        ...
 
     def check_success(self, cube_pos, target_pos):
         """Compute termination and truncation from the current state.
@@ -129,29 +132,17 @@ def main(cfg: DictConfig) -> None:
 
     Args:
       cfg: Hydra configuration composed of ``defaults.yaml`` and overrides.
-        Expected keys include:
-        - sim_config (str): Path to the Ark global sim config.
-        - environment_name (str): Environment identifier.
-        - algo (DictConfig): Algorithm group with ``name`` and ``model``.
-        - n_episodes (int): Number of episodes to evaluate.
-        - task_prompt (str, optional): Task string for language policies.
 
     Returns:
       None. Prints progress and a final success summary to stdout.
     """
-    sim_config = "./sim_config/global_config.yaml"
-    environment_name = "diffusion_env"
-
     print("Config:\n", OmegaConf.to_yaml(cfg))
 
     step_sleep = float(getattr(cfg, "step_sleep", 0.1))
     n_episodes = int(getattr(cfg, "n_episodes", 1))
-    n_episodes = 2
-    max_step = 1000
+    max_step = int(getattr(cfg, "max_steps", 1))
 
     robo_node = RobotNode()
-    from tqdm import tqdm
-    import time
 
     success_count = 0
     failure_count = 0

@@ -100,12 +100,21 @@ class PolicyNode(ABC, BaseNode):
 
     def reset(self) -> None:
         """Reset the internal state of the policy."""
-        self.policy.reset()
-        self.latest_action = None
-        # Allow subclasses to clear their own buffers
-        reset_hook = getattr(self, "_on_reset", None)
-        if callable(reset_hook):
-            reset_hook()
+        try:
+            self.observation_space.is_ready = False
+            self.suspend_communications(services=False)
+            self.policy.reset()
+            # Allow subclasses to clear their own buffers
+            reset_hook = getattr(self, "_on_reset", None)
+            if callable(reset_hook):
+                reset_hook()
+            self.latest_action = None
+            time.sleep(5)
+            self.observation_space.wait_until_observation_space_is_ready()
+            _ = self.observation_space.get_observation()
+        finally:
+            self.resume_communications(services=False)
+
 
     def _callback_reset_service(self, channel, msg):
         """Service callback to reset policy state.
@@ -114,14 +123,7 @@ class PolicyNode(ABC, BaseNode):
         """
         # Pause non-service comms to avoid races during reset
         log.info(f"[INFO] Received callback reset service")
-        self.suspend_communications(services=False)
-        try:
-            self.reset()
-            time.sleep(5)
-            self.observation_space.wait_until_observation_space_is_ready()
-            _ = self.observation_space.get_observation()
-        finally:
-            self.resume_communications(services=False)
+        self.reset()
         return flag_t()
 
     def step(self):
