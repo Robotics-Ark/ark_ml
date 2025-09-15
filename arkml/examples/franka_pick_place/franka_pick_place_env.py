@@ -4,7 +4,36 @@ from typing import Any
 import numpy as np
 from ark.env.ark_env import ArkEnv
 from arktypes.utils import pack, unpack
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
+
+from arktypes import (
+    task_space_command_t,
+    pose_t,
+    joint_state_t,
+    rigid_body_state_t,
+    rgbd_t,
+)
+from arktypes import flag_t
+
+from abc import ABC, abstractmethod
+
+
+def default_channels() -> dict[str, dict[str, type]]:
+    """Default action/observation channels for the Franka + cube sim."""
+    action_channels: dict[str, type] = {
+        "franka/cartesian_command/sim": task_space_command_t,
+    }
+    observation_channels: dict[str, type] = {
+        "franka/ee_state/sim": pose_t,
+        "franka/joint_states/sim": joint_state_t,
+        "cube/ground_truth/sim": rigid_body_state_t,
+        "target/ground_truth/sim": rigid_body_state_t,
+        "IntelRealSense/rgbd/sim": rgbd_t,
+    }
+    return {"actions": action_channels, "observations": observation_channels}
+
+
+# from ark.client.comm_infrastructure.base_node import BaseNode
 
 
 class RobotEnv(ArkEnv):
@@ -175,8 +204,73 @@ class RobotEnv(ArkEnv):
         if terminated:
             print("Cube is close enough to the target. Terminating episode.")
 
-        # truncated = bool(self.steps >= self.max_steps)
-        # if truncated:
-        #     print("Max steps reached. Terminating episode.")
+        truncated = bool(self.steps >= self.max_steps)
+        if truncated:
+            print("Max steps reached. Terminating episode.")
         truncated = False
         return terminated, truncated, self.steps
+
+
+def reset_scene(env) -> None:
+    """Minimal scene bootstrap: reset objects and exit.
+
+    This script no longer bridges observations/actions. The PolicyNode handles
+    that directly. We only ensure the scene is reset and ready.
+    """
+    env.reset()
+
+    # Reset the policy node state at the beginning of the episode
+    try:
+        env.send_service_request(
+            service_name="Policy/policy/reset",
+            request=flag_t(),
+            response_type=flag_t,
+        )
+    except Exception as e:
+        print(f"Warning: Failed to reset policy via service: {e}")
+    # Give subsystems a moment to settle
+    time.sleep(1.0)
+
+
+@hydra.main(
+    config_path="../../configs", config_name="defaults.yaml", version_base="1.3"
+)
+def main(cfg: DictConfig) -> None:
+    """Run rollouts for a configured policy.
+
+    Args:
+      cfg: Hydra configuration composed of ``defaults.yaml`` and overrides.
+        Expected keys include:
+        - sim_config (str): Path to the Ark global sim config.
+        - environment_name (str): Environment identifier.
+        - algo (DictConfig): Algorithm group with ``name`` and ``model``.
+        - n_episodes (int): Number of episodes to evaluate.
+        - task_prompt (str, optional): Task string for language policies.
+
+    Returns:
+      None. Prints progress and a final success summary to stdout.
+    """
+    sim_config = "./sim_config/global_config.yaml"
+    environment_name = "diffusion_env"
+
+    print("Config:\n", OmegaConf.to_yaml(cfg))
+
+    step_sleep = float(getattr(cfg, "step_sleep", 0.5))
+    n_episodes = int(getattr(cfg, "n_episodes", 1))
+    max_steps = 100
+
+    chans = default_channels()
+    env = RobotEnv(
+        config=sim_config,
+        environment_name=environment_name,
+        action_channels=chans["actions"],
+        observation_channels=chans["observations"],
+        max_steps=max_steps,
+        step_sleep=step_sleep,
+        sim=True,
+    )
+    env.spin()
+
+
+if __name__ == "__main__":
+    main()

@@ -63,7 +63,12 @@ def get_policy_node(cfg: DictConfig, device: torch.device):
 
 @register_policy("pizero")
 @register_policy("pi0")
-def _build_pizero(cfg: DictConfig, device: torch.device, stepper_frequency:int, channel_config: str | None = None):
+def _build_pizero(
+    cfg: DictConfig,
+    device: torch.device,
+    stepper_frequency: int,
+    channel_config: str | None = None,
+):
     """Build and return a PiZero policy node from config.
 
     Args:
@@ -74,10 +79,26 @@ def _build_pizero(cfg: DictConfig, device: torch.device, stepper_frequency:int, 
       Configured PiZeroPolicyNode  instance.
     """
     from arkml.nodes.pizero_node import PiZeroPolicyNode
-    return PiZeroPolicyNode(model_cfg=cfg.algo.model, device=device, stepper_frequency=stepper_frequency, channel_config=channel_config)
+
+    return PiZeroPolicyNode(
+        model_cfg=cfg.algo.model,
+        device=device,
+        stepper_frequency=stepper_frequency,
+        channel_config=channel_config,
+    )
 
 
 @register_policy("smolvla")
-def _build_smolvla(cfg: DictConfig, device: torch.device, stepper_frequency, channel_config: str | None = None):
+def _build_smolvla(
+    cfg: DictConfig,
+    device: torch.device,
+    stepper_frequency,
+    channel_config: str | None = None,
+):
     """Build and return SmolVLA that reuses the PiZero builder."""
-    return _build_pizero(model_cfg=cfg, device=device, stepper_frequency=stepper_frequency, channel_config=channel_config)
+    return _build_pizero(
+        model_cfg=cfg,
+        device=device,
+        stepper_frequency=stepper_frequency,
+        channel_config=channel_config,
+    )
