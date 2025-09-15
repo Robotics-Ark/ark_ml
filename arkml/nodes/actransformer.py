@@ -13,52 +13,6 @@ from arkml.core.policy_node import PolicyNode
 import numpy as np
 from PIL import Image
 
-
-def coerce_len1_len3_image(x):
-    """
-    Accepts images shaped like:
-        - [ [R, G, B] ]   where each channel is HxW (lists or np arrays), or
-        - [ [C, H, W] ]   CHW-style as nested lists/np arrays, or
-        - already a HWC/CHW array/tensor/PIL.
-    Returns a PIL.Image.Image in HWC uint8.
-    """
-    # Unwrap an outer length-1 container
-    if isinstance(x, (list, tuple)) and len(x) == 1:
-        x = x[0]
-
-    # If it's now a length-3 list/tuple, assume channels or CHW
-    if isinstance(x, (list, tuple)) and len(x) == 3:
-        chans = [np.asarray(c) for c in x]
-        # Case A: three HxW channel planes -> stack to HWC
-        if all(c.ndim == 2 for c in chans):
-            img = np.stack(chans, axis=-1)  # HxWx3
-        else:
-            # Case B: likely CHW -> convert to HWC
-            arr = np.asarray(x)
-            if arr.ndim == 3 and arr.shape[0] == 3:  # (3,H,W)
-                img = np.transpose(arr, (1, 2, 0))
-            else:
-                # Fallback: try to interpret directly as HWC
-                img = np.asarray(x)
-    else:
-        # Already array-like; try to make it HWC
-        img = np.asarray(x)
-
-    # If grayscale (H,W), promote to 3 channels
-    if img.ndim == 2:
-        img = np.stack([img] * 3, axis=-1)
-
-    # Ensure uint8 in [0,255]
-    if img.dtype != np.uint8:
-        img = np.clip(img, 0, 255)
-        if img.max() <= 1.0:
-            img = (img * 255).astype(np.uint8)
-        else:
-            img = img.astype(np.uint8)
-
-    return Image.fromarray(img)
-
-
 class TemporalEnsembler:
 
     def __init__(self, K, action_dim):
@@ -181,17 +135,10 @@ class ActPolicyNode(PolicyNode):
         z_dim = getattr(self.policy, "z_dim", 32)
         z_zero = torch.zeros((1, z_dim), dtype=torch.float32, device=self.device)
 
-        # actransformer.py::_predict_chunk
-
-        # image_np is that list-of-len-1 whose first entry is a list-of-len-3
-        pil_img = coerce_len1_len3_image(image_np)  # -> PIL.Image (H,W,3), uint8
-
-        # Run your torchvision pipeline (e.g., Resize/ToTensor/Normalize).
-        img_t = self.to_tensor(pil_img)  # -> torch.Tensor (3,H,W)
-
-        # Ensure batch dimension since the model expects (1,3,H,W)
-        if isinstance(img_t, torch.Tensor) and img_t.ndim == 3:
-            img_t = img_t.unsqueeze(0)  # -> (1,3,H,W)
+        if image_np.ndim == 3:
+            img_t = image_np.unsqueeze(0) # -> (1,3,H,W)
+        else:
+            img_t = image_np
 
         img_t = img_t.to(self.device)
 
@@ -202,10 +149,18 @@ class ActPolicyNode(PolicyNode):
         return pred.squeeze(0).cpu().numpy()  # (K,action_dim)
 
     @torch.no_grad()
-    def predict(self, obs):
+    def predict(self, obs_seq):
         """
         Returns: actions_to_exec (shape: (action_stride, action_dim))
         """
+        obs = {}
+        if "image" in obs_seq and obs_seq["image"] is not None:
+            obs["image"] = torch.tensor(obs_seq["image"], dtype=torch.float32)
+        if "state" in obs_seq and obs_seq["state"] is not None:
+            obs["state"] = torch.tensor(obs_seq["state"], dtype=torch.float32)
+        if "task" in obs_seq:
+            obs["task"] = obs_seq["task"]
+
         joints = obs["state"]
         image = obs["image"]
 
@@ -218,9 +173,8 @@ class ActPolicyNode(PolicyNode):
         )
         return actions_to_exec[0]
 
-    # TODO implement
     def publish_action(self, action):
-        """Pack and publish action to downstream consumers."""
+
         if action is None or action.shape[0] < 8:
             return
 

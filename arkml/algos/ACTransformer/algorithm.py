@@ -1,17 +1,16 @@
 from typing import Any
 import torch
-from omegaconf import DictConfig
-from torch.utils.data import DataLoader
-from torchvision import transforms
-from torch.utils.data import DataLoader, random_split
 from arkml.algos.ACTransformer.evaluator import ACTransformerEvaluator
 from arkml.algos.ACTransformer.trainer import ACTransformerTrainer
 from arkml.core.algorithm import BaseAlgorithm
 from arkml.core.registry import ALGOS
+from omegaconf import DictConfig,  OmegaConf
+from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, random_split
+from torchvision import transforms
+
 from .dataset import ActionChunkingArkDataset
 
-
-# TODO use the configurations correctly
 @ALGOS.register("action_chunking_transformer")
 class ACTalgorithm(BaseAlgorithm):
     def __init__(self, policy, device: str, cfg: DictConfig):
@@ -25,13 +24,10 @@ class ACTalgorithm(BaseAlgorithm):
             transforms.Resize((256, 256)),
         ])
 
-        if cfg.chunk_size:
-            chunk_size = cfg.chunk_size
-        else:
-            chunk_size = 50
+        chunk_size = cfg.algo.trainer.chunk_size
 
         dataset = ActionChunkingArkDataset(
-            dataset_path=cfg.dataset.path,
+            dataset_path=cfg.data.dataset_path,
             transform=transform,
             chunk_size=chunk_size,
         )
@@ -63,7 +59,14 @@ class ACTalgorithm(BaseAlgorithm):
         )
 
     def train(self, *args, **kwargs) -> Any:
-        trainer = ACTransformerTrainer(self.policy, self.train_loader, device=self.device)
+        epochs = self.cfg.algo.trainer.epochs
+        lr = self.cfg.algo.trainer.lr
+        weight_decay = self.cfg.algo.trainer.weight_decay
+        grad_clip = self.cfg.algo.trainer.grad_clip
+        beta_1 = self.cfg.algo.trainer.beta
+        trainer = ACTransformerTrainer(self.policy, self.train_loader, epochs=epochs,
+                                       lr=lr, weight_decay=weight_decay, grad_clip=grad_clip,
+                                        beta=beta_1, device=self.device)
         return trainer.fit()
 
     def eval(self, *args, **kwargs) -> dict:
