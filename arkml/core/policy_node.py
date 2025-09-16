@@ -38,7 +38,6 @@ class PolicyNode(ABC, BaseNode):
     ):
         super().__init__("Policy", global_config)
 
-
         # Channel config to publish and subscribe
         channel_cfg_path = Path(global_config)
         if channel_cfg_path.exists():
@@ -85,7 +84,9 @@ class PolicyNode(ABC, BaseNode):
         self.policy.to_device(device=device)
         self.policy.set_eval_mode()
         self.latest_action = None
+        self._resetting = False
         self._stop_event = threading.Event()
+        self._publish_lock = threading.Lock()
 
         self.worker_thread = threading.Thread(
             target=self._inference_worker, daemon=True
@@ -104,6 +105,10 @@ class PolicyNode(ABC, BaseNode):
     def _inference_worker(self):
         """Background thread to run model inference asynchronously."""
         while not self._stop_event.is_set():
+            if self._resetting:
+                self.latest_action = None
+                time.sleep(0.05)
+                continue
             self.observation_space.wait_until_observation_space_is_ready()
             obs = self.observation_space.get_observation()
             if obs is not None:
@@ -113,42 +118,50 @@ class PolicyNode(ABC, BaseNode):
 
     def reset(self) -> None:
         """Reset the internal state of the policy."""
-        try:
+        # Block publishing immediately and clear any pending action
+        with self._publish_lock:
             self.observation_space.is_ready = False
-            self.suspend_communications(services=False)
+            self.latest_action = None
             self.policy.reset()
             # Allow subclasses to clear their own buffers
             reset_hook = getattr(self, "_on_reset", None)
             if callable(reset_hook):
                 reset_hook()
-            self.latest_action = None
-            time.sleep(5)
-            self.observation_space.wait_until_observation_space_is_ready()
-            _ = self.observation_space.get_observation()
-        except Exception as e:
-            log.error(e)
-        finally:
-            self.resume_communications(services=False)
+        self.resume_communications(services=False)
+        self.observation_space.wait_until_observation_space_is_ready()
+        _ = self.observation_space.get_observation()
+        self._resetting = False
 
     def _callback_reset_service(self, channel, msg):
         """Service callback to reset policy state.
 
-        Returns an empty flag_t response after clearing internal buffers.
         """
         log.info(f"[INFO] Received callback reset service")
-        self.reset()
+
+        self._resetting = False
+        # Suspend comms (stops publisher/listener at LCM level)
+        self.suspend_communications(services=False)
+        # Clear obs readiness and reset policy/buffers
+        self.observation_space.is_ready = False
+        # Schedule the actual reset after 2 second
+        t = threading.Timer(2.0, self.reset)
+        t.daemon = True
+        t.start()
+        time.sleep(2.0)
+        log.info(f"[INFO] Finished callback reset service")
         return flag_t()
 
     def step(self):
         """Stepper loop: publish latest action if available."""
-        if self.latest_action is None:
-            return
-        self.publish_action(self.latest_action)
-        self.latest_action = None
+        with self._publish_lock:
+            if self._resetting or self.latest_action is None:
+                return
+            self.publish_action(self.latest_action)
+            self.latest_action = None
 
     def publish_action(self, action: np.ndarray):
         """Pack and publish action to downstream consumers."""
-        if action is None or action.shape[0] < 8:
+        if action is None:
             return
 
         self.action_space.pack_and_publish(action)

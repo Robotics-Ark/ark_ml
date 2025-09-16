@@ -1,7 +1,7 @@
+import argparse
 import time
 from typing import Any
 
-import hydra
 import numpy as np
 from ark.env.ark_env import ArkEnv
 from arktypes import flag_t
@@ -13,7 +13,6 @@ from arktypes import (
     rgbd_t,
 )
 from arktypes.utils import unpack
-from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 
 
@@ -118,16 +117,14 @@ class RobotNode(ArkEnv):
                 response_type=flag_t,
             )
             self.reset()
+
         except Exception as e:
             print(f"Warning: Failed to reset policy via service: {e}")
         # Give subsystems a moment to settle
         time.sleep(1.0)
 
 
-@hydra.main(
-    config_path="../../configs", config_name="defaults.yaml", version_base="1.3"
-)
-def main(cfg: DictConfig) -> None:
+def main() -> None:
     """Run rollouts for a configured policy.
 
     Args:
@@ -136,11 +133,34 @@ def main(cfg: DictConfig) -> None:
     Returns:
       None. Prints progress and a final success summary to stdout.
     """
-    print("Config:\n", OmegaConf.to_yaml(cfg))
 
-    step_sleep = float(getattr(cfg, "step_sleep", 0.1))
-    n_episodes = int(getattr(cfg, "n_episodes", 1))
-    max_step = int(getattr(cfg, "max_steps", 1))
+    parser = argparse.ArgumentParser(
+        description="Run rollouts for a configured policy."
+    )
+    parser.add_argument(
+        "--step_sleep",
+        type=float,
+        default=0.1,
+        help="Sleep time between steps (default: 0.1s)",
+    )
+    parser.add_argument(
+        "--n_episodes",
+        type=int,
+        default=3,
+        help="Number of episodes to run (default: 3)",
+    )
+    parser.add_argument(
+        "--max_step",
+        type=int,
+        default=500,
+        help="Maximum number of steps per episode (default: 500)",
+    )
+
+    args = parser.parse_args()
+
+    step_sleep = args.step_sleep
+    n_episodes = args.n_episodes
+    max_step = args.max_step
 
     robo_node = RobotNode()
 
