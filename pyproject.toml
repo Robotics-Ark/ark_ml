@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "arkml"
 version = "1.0.0"
-description = "Ark ML Robotics Framework"
+description = "Machine learning backbone for the Ark Robotics Framework, providing core models, algorithms, and tools to enable intelligent perception, decision-making, and control in robotic applications."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
