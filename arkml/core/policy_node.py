@@ -133,9 +133,7 @@ class PolicyNode(ABC, BaseNode):
         self._resetting = False
 
     def _callback_reset_service(self, channel, msg):
-        """Service callback to reset policy state.
-
-        """
+        """Service callback to reset policy state."""
         log.info(f"[INFO] Received callback reset service")
 
         self._resetting = False
