@@ -2,16 +2,17 @@ import importlib
 import threading
 import time
 from abc import abstractmethod, ABC
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 from typing import Any
-from collections.abc import Callable
+
 import numpy as np
 import yaml
 from ark.client.comm_infrastructure.base_node import BaseNode
 from ark.env.spaces import ActionSpace, ObservationSpace
 from ark.tools.log import log
-from arktypes import flag_t
+from arktypes import flag_t, string_t
 from torch import nn
 
 
@@ -30,13 +31,14 @@ class PolicyNode(ABC, BaseNode):
     def __init__(
         self,
         policy: nn.Module,
+        policy_name: str,
         device: str,
         observation_unpacking: Callable,
         action_packing: Callable,
         stepper_frequency: int,
         global_config=None,
     ):
-        super().__init__("Policy", global_config)
+        super().__init__(policy_name, global_config)
 
         # Channel config to publish and subscribe
         channel_cfg_path = Path(global_config)
@@ -84,6 +86,7 @@ class PolicyNode(ABC, BaseNode):
         self.policy.to_device(device=device)
         self.policy.set_eval_mode()
         self.latest_action = None
+        self._stop_service = True
         self._resetting = False
         self._stop_event = threading.Event()
         self._publish_lock = threading.Lock()
@@ -96,8 +99,20 @@ class PolicyNode(ABC, BaseNode):
         # Stepper publishes actions at fixed control frequency
         self.create_stepper(stepper_frequency, self.step)
 
-        # Reset service to reset policy state
+        # Create services - start, stop and reset policy state
+        self._start_service_name = f"{self.name}/policy/start"
+        self._stop_service_name = f"{self.name}/policy/stop"
         self._reset_service_name = f"{self.name}/policy/reset"
+
+        # start
+        self.create_service(
+            self._start_service_name, flag_t, flag_t, self._callback_start_service
+        )
+        # stop
+        self.create_service(
+            self._stop_service_name, flag_t, flag_t, self._callback_stop_service
+        )
+        # reset
         self.create_service(
             self._reset_service_name, flag_t, flag_t, self._callback_reset_service
         )
@@ -105,7 +120,7 @@ class PolicyNode(ABC, BaseNode):
     def _inference_worker(self):
         """Background thread to run model inference asynchronously."""
         while not self._stop_event.is_set():
-            if self._resetting:
+            if self._stop_service:
                 self.latest_action = None
                 time.sleep(0.05)
                 continue
@@ -120,7 +135,10 @@ class PolicyNode(ABC, BaseNode):
         """Reset the internal state of the policy."""
         # Block publishing immediately and clear any pending action
         with self._publish_lock:
+            self._stop_service = True
+            self._resetting = True
             self.observation_space.is_ready = False
+            self.suspend_communications(services=False)
             self.latest_action = None
             self.policy.reset()
             # Allow subclasses to clear their own buffers
@@ -132,25 +150,35 @@ class PolicyNode(ABC, BaseNode):
         _ = self.observation_space.get_observation()
         self._resetting = False
 
-    def _callback_reset_service(self, channel, msg):
+    def _callback_reset_service(self, channel, msg) -> string_t:
         """Service callback to reset policy state."""
         log.info(f"[INFO] Received callback reset service")
+        reset_status = string_t()
+        try:
+            self.reset()
+            reset_status.data = "Successfully reset policy state"
+            log.info(f"[INFO] Finished callback reset service")
+        except Exception as e:
+            reset_status.data = f"Failed to reset policy state: {e}"
+            log.error(f"[ERROR] Failed to reset policy state: {e}")
+        return reset_status
 
-        self._resetting = False
-        # Suspend comms (stops publisher/listener at LCM level)
-        self.suspend_communications(services=False)
-        # Schedule the actual reset after 2 second
-        t = threading.Timer(2.0, self.reset)
-        t.daemon = True
-        t.start()
-        time.sleep(2.0)
-        log.info(f"[INFO] Finished callback reset service")
+    def _callback_start_service(self, channel, msg) -> flag_t:
+        """Start policy prediction service"""
+        log.info(f"[INFO] Received callback to start service")
+        self._stop_service = False
+        return flag_t()
+
+    def _callback_stop_service(self, channel, msg) -> flag_t:
+        """Stop policy prediction service"""
+        log.info(f"[INFO] Received callback to stop service")
+        self._stop_service = True
         return flag_t()
 
     def step(self):
         """Stepper loop: publish latest action if available."""
         with self._publish_lock:
-            if self._resetting or self.latest_action is None:
+            if self._stop_service or self.latest_action is None or self._resetting:
                 return
             self.publish_action(self.latest_action)
             self.latest_action = None

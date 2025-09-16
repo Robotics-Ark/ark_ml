@@ -19,11 +19,10 @@ class PiZeroPolicyNode(PolicyNode):
 
     def __init__(
         self,
-        model_cfg,
+        cfg,
         device: str,
-        stepper_frequency: int,
-        global_config=None,
     ):
+        model_cfg = cfg.algo.model
         policy = PiZeroNet(
             policy_type=model_cfg.policy_type,
             model_path=model_cfg.model_path,
@@ -34,10 +33,11 @@ class PiZeroPolicyNode(PolicyNode):
         super().__init__(
             policy=policy,
             device=device,
+            policy_name=cfg.policy_node_name,
             observation_unpacking=observation_unpacking,
             action_packing=action_packing,
-            stepper_frequency=stepper_frequency,
-            global_config=global_config,
+            stepper_frequency=cfg.stepper_frequency,
+            global_config=cfg.global_config,
         )
 
         self.policy.to_device(device)

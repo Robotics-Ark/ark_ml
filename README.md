@@ -44,6 +44,41 @@ HYDRA_FULL_ERROR=1 arkml-rollout algo=<ml_algorithm>  \
   algo.model.model_path=path/to/the/model \
   algo.model.task_prompt=task_prompt
 ```
+### Policy services available
+### Start Service
+Start the policy service to get machine learning based action prediction
+
+```bash
+PolicyName/policy/stop
+```
+`PolicyName` can be set through command line by using below command 
+
+```bash
+HYDRA_FULL_ERROR=1 arkml-rollout algo=<ml_algorithm>  \
+  algo.model.model_path=path/to/the/model \
+  algo.model.task_prompt=task_prompt \
+  policy_node_name=policy_name
+```
+
+### Stop Service
+Stop the policy service to pause machine learning based action prediction
+
+```bash
+PolicyName/policy/stop
+```
+
+### Reset Service
+Reset the policy state
+
+```bash
+PolicyName/policy/stop
+```
+
+## Client  Service
+A client service can be started using below command
+```bash
+python  ark_ml/arkml/examples/franka_pick_place/franka_pick_place.py --max_step 1000 --n_episodes 5 --step_sleep 0.1
+```
 
 ## Training
 Train a model with a dataset:

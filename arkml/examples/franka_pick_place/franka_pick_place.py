@@ -4,7 +4,7 @@ from typing import Any
 
 import numpy as np
 from ark.env.ark_env import ArkEnv
-from arktypes import flag_t
+from arktypes import flag_t, string_t
 from arktypes import (
     task_space_command_t,
     pose_t,
@@ -114,7 +114,7 @@ class RobotNode(ArkEnv):
             self.send_service_request(
                 service_name="Policy/policy/reset",
                 request=flag_t(),
-                response_type=flag_t,
+                response_type=string_t,
             )
             self.reset()
 
@@ -170,7 +170,12 @@ def main() -> None:
     for ep in tqdm(range(n_episodes), desc="Episodes", unit="ep"):
         robo_node.reset_scene()
         success = False
-        time.sleep(1)
+        time.sleep(5)
+        robo_node.send_service_request(
+            service_name="Policy/policy/start",
+            request=flag_t(),
+            response_type=flag_t,
+        )
         for step_count in tqdm(
             range(max_step + 1), desc=f"Ep {ep}", unit="step", leave=False
         ):
@@ -197,6 +202,11 @@ def main() -> None:
             step_count += 1
             time.sleep(step_sleep)
 
+        robo_node.send_service_request(
+            service_name="Policy/policy/stop",
+            request=flag_t(),
+            response_type=flag_t,
+        )
         if success:
             success_count += 1
         else:

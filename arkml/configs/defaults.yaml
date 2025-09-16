@@ -12,9 +12,9 @@ max_steps: 500
 step_sleep: 0.1
 
 # Policy Config
+policy_node_name: Policy
 stepper_frequency: 5
 
-# Pub-Sub
 # Default channel config file used by PolicyNode. Override via CLI if needed.
 global_config: "ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml"
 

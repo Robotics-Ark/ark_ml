@@ -1,10 +1,10 @@
-from typing import Callable
+from collections.abc import Callable
 
 import torch
 from omegaconf import DictConfig
 
 # Global registry for policy node builders
-_POLICY_BUILDERS: dict[str, Callable[[DictConfig, torch.device, int, str], object]] = {}
+_POLICY_BUILDERS: dict[str, Callable[[DictConfig, torch.device], object]] = {}
 
 
 def register_policy(key: str):
@@ -57,7 +57,7 @@ def get_policy_node(cfg: DictConfig, device: torch.device):
             f"No policy builder registered for key '{key}'. Available: {list(_POLICY_BUILDERS.keys())}"
         )
     global_config = getattr(cfg, "global_config", None)
-    return builder(cfg, device, cfg.stepper_frequency, global_config)
+    return builder(cfg, device)
 
 
 @register_policy("pizero")
@@ -65,8 +65,6 @@ def get_policy_node(cfg: DictConfig, device: torch.device):
 def _build_pizero(
     cfg: DictConfig,
     device: torch.device,
-    stepper_frequency: int,
-    global_config: str | None = None,
 ):
     """Build and return a PiZero policy node from config.
 
@@ -80,10 +78,8 @@ def _build_pizero(
     from arkml.nodes.pizero_node import PiZeroPolicyNode
 
     return PiZeroPolicyNode(
-        model_cfg=cfg.algo.model,
+        cfg=cfg,
         device=device,
-        stepper_frequency=stepper_frequency,
-        global_config=global_config,
     )
 
 
@@ -91,13 +87,17 @@ def _build_pizero(
 def _build_smolvla(
     cfg: DictConfig,
     device: torch.device,
-    stepper_frequency,
-    global_config: str | None = None,
 ):
     """Build and return SmolVLA that reuses the PiZero builder."""
     return _build_pizero(
-        model_cfg=cfg,
+        cfg=cfg,
         device=device,
-        stepper_frequency=stepper_frequency,
-        global_config=global_config,
     )
+
+
+@register_policy("action_chunking_transformer")
+def _build_ACTransformer(cfg: DictConfig, device: torch.device):
+    """Build and return ACTransformer"""
+    from arkml.nodes.actransformer import ActPolicyNode
+
+    return ActPolicyNode(cfg=cfg, device=str(device))
