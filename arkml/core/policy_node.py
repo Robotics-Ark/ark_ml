@@ -139,8 +139,6 @@ class PolicyNode(ABC, BaseNode):
         self._resetting = False
         # Suspend comms (stops publisher/listener at LCM level)
         self.suspend_communications(services=False)
-        # Clear obs readiness and reset policy/buffers
-        self.observation_space.is_ready = False
         # Schedule the actual reset after 2 second
         t = threading.Timer(2.0, self.reset)
         t.daemon = True
