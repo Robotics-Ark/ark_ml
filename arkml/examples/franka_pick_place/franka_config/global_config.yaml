@@ -20,3 +20,17 @@ robots:
 
 sensors:
   - "sensors/IntelRealSense.yaml"  # Path to robot configuration file
+
+
+channel_config:
+  action_channels:
+    franka/cartesian_command/sim: task_space_command_t
+
+  observation_channels:
+    cube/ground_truth/sim: rigid_body_state_t
+    target/ground_truth/sim: rigid_body_state_t
+    franka/joint_states/sim: joint_state_t
+    franka/ee_state/sim: pose_t
+    IntelRealSense/rgbd/sim: rgbd_t
+
+

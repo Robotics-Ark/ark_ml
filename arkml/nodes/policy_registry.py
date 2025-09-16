@@ -56,9 +56,8 @@ def get_policy_node(cfg: DictConfig, device: torch.device):
         raise NotImplementedError(
             f"No policy builder registered for key '{key}'. Available: {list(_POLICY_BUILDERS.keys())}"
         )
-    # Optional channel_config path may be provided in Hydra defaults.yaml
-    channel_config = getattr(cfg, "channel_config", None)
-    return builder(cfg, device, cfg.stepper_frequency, channel_config)
+    global_config = getattr(cfg, "global_config", None)
+    return builder(cfg, device, cfg.stepper_frequency, global_config)
 
 
 @register_policy("pizero")
@@ -67,7 +66,7 @@ def _build_pizero(
     cfg: DictConfig,
     device: torch.device,
     stepper_frequency: int,
-    channel_config: str | None = None,
+    global_config: str | None = None,
 ):
     """Build and return a PiZero policy node from config.
 
@@ -84,7 +83,7 @@ def _build_pizero(
         model_cfg=cfg.algo.model,
         device=device,
         stepper_frequency=stepper_frequency,
-        channel_config=channel_config,
+        global_config=global_config,
     )
 
 
@@ -93,12 +92,12 @@ def _build_smolvla(
     cfg: DictConfig,
     device: torch.device,
     stepper_frequency,
-    channel_config: str | None = None,
+    global_config: str | None = None,
 ):
     """Build and return SmolVLA that reuses the PiZero builder."""
     return _build_pizero(
         model_cfg=cfg,
         device=device,
         stepper_frequency=stepper_frequency,
-        channel_config=channel_config,
+        global_config=global_config,
     )

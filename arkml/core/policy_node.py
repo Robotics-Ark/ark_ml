@@ -1,18 +1,17 @@
 import importlib
-import queue
 import threading
 import time
 from abc import abstractmethod, ABC
+from functools import partial
 from pathlib import Path
 from typing import Any
-
+from collections.abc import Callable
 import numpy as np
 import yaml
 from ark.client.comm_infrastructure.base_node import BaseNode
 from ark.env.spaces import ActionSpace, ObservationSpace
 from ark.tools.log import log
 from arktypes import flag_t
-from arktypes.utils import pack, unpack
 from torch import nn
 
 
@@ -22,31 +21,44 @@ class PolicyNode(ABC, BaseNode):
     Args:
       policy: Underlying policy module to be executed.
       device: Target device identifier (e.g., ``"cpu"``, ``"cuda"``).
+      observation_unpacking: Function to unpack observations.
+      action_packing: Function to pack actions.
+      stepper_frequency: Frequency of stepper.
+      global_config: Global configuration path of the simulator or robot
     """
 
     def __init__(
         self,
         policy: nn.Module,
         device: str,
+        observation_unpacking: Callable,
+        action_packing: Callable,
         stepper_frequency: int,
         global_config=None,
-        channel_config_path: str | Path | None = None,
     ):
         super().__init__("Policy", global_config)
 
+
         # Channel config to publish and subscribe
-        channel_cfg_path = Path(channel_config_path)
+        channel_cfg_path = Path(global_config)
         if channel_cfg_path.exists():
             with open(channel_cfg_path, "r") as f:
                 cfg_dict = yaml.safe_load(f) or {}
         else:
-            raise FileNotFoundError(
-                f"Config file could not found {channel_config_path}"
-            )
-        observation_channels = cfg_dict.get("observation_channels", {})
-        action_channels = cfg_dict.get("action_channels", {})
-        self.obs_keys = list(observation_channels.keys())
-        self.action_keys = list(action_channels.keys())
+            raise FileNotFoundError(f"Config file could not found {global_config}")
+
+        if "channel_config" not in cfg_dict:
+            raise ValueError("channel_config must not be empty and properly configured")
+
+        channel_config = cfg_dict["channel_config"]
+        observation_channels = channel_config.get("observation_channels", {})
+        action_channels = channel_config.get("action_channels", {})
+
+        obs_keys = list(observation_channels.keys())
+        action_keys = list(action_channels.keys())
+
+        self.observation_unpacking = partial(observation_unpacking, obs_keys=obs_keys)
+        self.action_packing = partial(action_packing, action_keys=action_keys)
 
         obs_channels = self._resolve_channel_types(observation_channels)
 
@@ -113,6 +125,8 @@ class PolicyNode(ABC, BaseNode):
             time.sleep(5)
             self.observation_space.wait_until_observation_space_is_ready()
             _ = self.observation_space.get_observation()
+        except Exception as e:
+            log.error(e)
         finally:
             self.resume_communications(services=False)
 
@@ -121,7 +135,6 @@ class PolicyNode(ABC, BaseNode):
 
         Returns an empty flag_t response after clearing internal buffers.
         """
-        # Pause non-service comms to avoid races during reset
         log.info(f"[INFO] Received callback reset service")
         self.reset()
         return flag_t()
@@ -145,7 +158,8 @@ class PolicyNode(ABC, BaseNode):
         """Compute the action(s) from observations."""
         ...
 
-    def _resolve_channel_types(self, mapping: dict[str, Any]) -> dict[str, type]:
+    @staticmethod
+    def _resolve_channel_types(mapping: dict[str, Any]) -> dict[str, type]:
         """Resolve type names from config into arktypes classes.
 
         Accepts either already-imported classes or string names present in the
@@ -161,71 +175,3 @@ class PolicyNode(ABC, BaseNode):
             else:
                 resolved[ch_name] = t
         return resolved
-
-    def observation_unpacking(self, observation_dict):
-        """Unpack raw Ark observations into structured components.
-
-        Converts incoming channel messages into a dictionary with primitive
-        types useful for policies.
-
-        Returns a dictionary with keys:
-          - ``cube``: np.ndarray (3,) cube position
-          - ``target``: np.ndarray (3,) target position
-          - ``gripper``: list[float] gripper opening
-          - ``franka_ee``: tuple(np.ndarray (3,), np.ndarray (4,)) EE position and quaternion
-          - ``images``: tuple(rgb, depth) from the RGBD sensor
-
-        Args:
-          observation_dict: Mapping from channel name to serialized Ark message.
-
-        Returns:
-          dict: Structured observation dictionary as described above.
-        """
-
-        if not observation_dict or any(v is None for v in observation_dict.values()):
-            return None
-        cube_state = observation_dict[self.obs_keys[0]]
-        target_state = observation_dict[self.obs_keys[1]]
-        joint_state = observation_dict[self.obs_keys[2]]
-        ee_state = observation_dict[self.obs_keys[3]]
-        images = observation_dict[self.obs_keys[4]]
-        _, cube_position, _, _, _ = unpack.rigid_body_state(cube_state)
-        _, target_position, _, _, _ = unpack.rigid_body_state(target_state)
-        _, _, franka_joint_position, _, _ = unpack.joint_state(joint_state)
-        franka_ee_position, franka_ee_orientation = unpack.pose(ee_state)
-        rgb, depth = unpack.rgbd(images)
-
-        gripper_position = franka_joint_position[
-            -2
-        ]  # Assuming last two joints are gripper
-
-        return {
-            "cube": cube_position,
-            "target": target_position,
-            "gripper": [gripper_position],
-            "franka_ee": (franka_ee_position, franka_ee_orientation),
-            "images": (rgb, depth),
-        }
-
-    def action_packing(self, action: list) -> dict[str, Any]:
-        """Pack action into Ark cartesian command message.
-
-        Expects an 8D vector representing end-effector position, orientation
-        quaternion, and gripper command in the following order:
-        ``[x, y, z, qx, qy, qz, qw, gripper]``.
-
-        Args:
-          action: List describing the cartesian command.
-
-        Returns:
-          dict[str, ...]: Mapping with key pointing to a packed Ark message.
-        """
-
-        xyz_command = np.array(action[:3])
-        quaternion_command = np.array(action[3:7])
-        gripper_command = action[7]
-
-        franka_cartesian_command = pack.task_space_command(
-            "all", xyz_command, quaternion_command, gripper_command
-        )
-        return {self.action_keys[0]: franka_cartesian_command}

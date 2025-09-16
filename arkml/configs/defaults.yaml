@@ -16,5 +16,5 @@ stepper_frequency: 5
 
 # Pub-Sub
 # Default channel config file used by PolicyNode. Override via CLI if needed.
-channel_config: "ark_ml/arkml/examples/franka_pick_place/policy_channels.yaml"
+global_config: "ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml"
 

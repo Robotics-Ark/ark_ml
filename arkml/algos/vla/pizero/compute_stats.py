@@ -3,14 +3,17 @@ import json
 import os
 import pickle
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any
 
 import numpy as np
 from PIL import Image
 
 
 def estimate_num_samples(
-    dataset_len: int, min_num_samples: int = 100, max_num_samples: int = 10_000, power: float = 0.75
+    dataset_len: int,
+    min_num_samples: int = 100,
+    max_num_samples: int = 10_000,
+    power: float = 0.75,
 ) -> int:
     """Heuristic from LeRobot to estimate sample count based on dataset size."""
     if dataset_len < min_num_samples:
@@ -25,7 +28,7 @@ def sample_indices(data_len: int) -> list[int]:
     return np.round(np.linspace(0, data_len - 1, num_samples)).astype(int).tolist()
 
 
-def _accumulate_moments(x: np.ndarray, state: Dict[str, Any]) -> None:
+def _accumulate_moments(x: np.ndarray, state: dict[str, Any]) -> None:
     """Accumulate count, sum, sumsq, min, max across the first axis of x.
 
     x is expected to be shape (N, D...) where axis=0 is the sample axis.
@@ -39,7 +42,7 @@ def _accumulate_moments(x: np.ndarray, state: Dict[str, Any]) -> None:
     state["max"] = np.maximum(state["max"], x.max(axis=0))
 
 
-def _finalize_stats(state: Dict[str, Any]) -> Dict[str, np.ndarray]:
+def _finalize_stats(state: dict[str, Any]) -> dict[str, np.ndarray]:
     count = max(1, int(state["count"]))
     mean = state["sum"] / count
     var = np.maximum(0.0, state["sumsq"] / count - np.square(mean))
@@ -53,7 +56,7 @@ def _finalize_stats(state: Dict[str, Any]) -> Dict[str, np.ndarray]:
     }
 
 
-def _init_state(shape: Tuple[int, ...], dtype=np.float64) -> Dict[str, Any]:
+def _init_state(shape: tuple[int, ...], dtype=np.float64) -> dict[str, Any]:
     return {
         "count": 0,
         "sum": np.zeros(shape, dtype=dtype),
@@ -64,7 +67,13 @@ def _init_state(shape: Tuple[int, ...], dtype=np.float64) -> Dict[str, Any]:
 
 
 def _iter_trajectories(dataset_path: str):
-    files = sorted([os.path.join(dataset_path, f) for f in os.listdir(dataset_path) if f.endswith(".pkl")])
+    files = sorted(
+        [
+            os.path.join(dataset_path, f)
+            for f in os.listdir(dataset_path)
+            if f.endswith(".pkl")
+        ]
+    )
     for fpath in files:
         with open(fpath, "rb") as f:
             traj_list = pickle.load(f)
@@ -72,7 +81,9 @@ def _iter_trajectories(dataset_path: str):
                 yield traj
 
 
-def compute_pizero_stats(dataset_path: str, sample_images_only: bool = True) -> Dict[str, Dict[str, Any]]:
+def compute_pizero_stats(
+    dataset_path: str, sample_images_only: bool = True
+) -> dict[str, dict[str, Any]]:
     """Compute dataset statistics for PiZero datasets.
 
     Assumptions based on current PiZeroDataset:
@@ -95,7 +106,9 @@ def compute_pizero_stats(dataset_path: str, sample_images_only: bool = True) -> 
     state_block = np.asarray(first["state"][:10], dtype=np.float64)  # (10, state_dim)
     img_arr = np.asarray(first["state"][10])  # (H,W,C), uint8 assumed
     if img_arr.ndim != 3 or img_arr.shape[-1] != 3:
-        raise ValueError("Expected RGB image at trajectory['state'][10] with shape (H,W,3)")
+        raise ValueError(
+            "Expected RGB image at trajectory['state'][10] with shape (H,W,3)"
+        )
     action_arr = np.asarray(first["action"])  # (action_dim,) or (1, action_dim)
     if action_arr.ndim == 2 and action_arr.shape[0] == 1:
         action_arr = action_arr[0]
@@ -163,9 +176,18 @@ def compute_pizero_stats(dataset_path: str, sample_images_only: bool = True) -> 
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Compute PiZero dataset stats (LeRobot-compatible)")
-    parser.add_argument("--dataset_path", type=str, required=True, help="Directory with .pkl trajectory files")
-    parser.add_argument("--out", type=str, required=True, help="Output JSON path for stats")
+    parser = argparse.ArgumentParser(
+        description="Compute PiZero dataset stats (LeRobot-compatible)"
+    )
+    parser.add_argument(
+        "--dataset_path",
+        type=str,
+        required=True,
+        help="Directory with .pkl trajectory files",
+    )
+    parser.add_argument(
+        "--out", type=str, required=True, help="Output JSON path for stats"
+    )
     parser.add_argument(
         "--full_images",
         action="store_true",
@@ -173,10 +195,14 @@ def main():
     )
     args = parser.parse_args()
 
-    stats = compute_pizero_stats(args.dataset_path, sample_images_only=not args.full_images)
+    stats = compute_pizero_stats(
+        args.dataset_path, sample_images_only=not args.full_images
+    )
 
     # Convert numpy arrays to lists for JSON
-    serializable = {k: {kk: vv.tolist() for kk, vv in d.items()} for k, d in stats.items()}
+    serializable = {
+        k: {kk: vv.tolist() for kk, vv in d.items()} for k, d in stats.items()
+    }
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -188,4 +214,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

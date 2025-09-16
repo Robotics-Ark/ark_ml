@@ -6,9 +6,11 @@ import torch
 from arkml.algos.vla.pizero.models import PiZeroNet
 from arkml.core.policy_node import PolicyNode
 
+from arkml.utils.franka_utils import observation_unpacking, action_packing
+
 
 class PiZeroPolicyNode(PolicyNode):
-    """Wrapper node for PiZero/SmolVLA.
+    """Wrapper node for PiZero
 
     Args:
       model_cfg: Model configurations.
@@ -21,7 +23,6 @@ class PiZeroPolicyNode(PolicyNode):
         device: str,
         stepper_frequency: int,
         global_config=None,
-        channel_config: str | None = None,
     ):
         policy = PiZeroNet(
             policy_type=model_cfg.policy_type,
@@ -33,9 +34,10 @@ class PiZeroPolicyNode(PolicyNode):
         super().__init__(
             policy=policy,
             device=device,
+            observation_unpacking=observation_unpacking,
+            action_packing=action_packing,
             stepper_frequency=stepper_frequency,
             global_config=global_config,
-            channel_config_path=channel_config,
         )
 
         self.policy.to_device(device)
@@ -72,15 +74,7 @@ class PiZeroPolicyNode(PolicyNode):
         img = img.float().div(255.0).unsqueeze(0)  # (1, C, H, W)
 
         # ---- State ----
-        state = np.concatenate(
-            [
-                np.asarray(ob["cube"]),
-                np.asarray(ob["target"]),
-                np.asarray(ob["gripper"]),
-                np.asarray(ob["franka_ee"][0]),
-            ]
-        )
-        state = torch.from_numpy(state).float().unsqueeze(0)  # (1, D)
+        state = torch.from_numpy(ob["state"]).float().unsqueeze(0)  # (1, D)
 
         return {
             "image": img,
@@ -121,19 +115,3 @@ class PiZeroPolicyNode(PolicyNode):
                 self._action_queue.append(actions[i])
 
         return self._action_queue.popleft()
-
-    # def publish_action(self, action: np.ndarray):
-    #     """Pack and publish action to downstream consumers."""
-    #     if action is None or action.shape[0] < 8:
-    #         return
-    #
-    #     xyz = np.asarray(action[:3], dtype=np.float32)
-    #     quat = np.asarray(action[3:7], dtype=np.float32)
-    #     grip = float(action[7])
-    #     msg = pack.task_space_command("all", xyz, quat, grip)
-    #
-    #     # Prefer multi-channel publisher if configured
-    #     if getattr(self, "action_pub", None) is not None:
-    #         self.action_pub.publish({"nex_action": msg})
-    #     else:
-    #         self.pub.publish(msg)
