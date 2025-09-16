@@ -1,6 +1,6 @@
 # ark_ml
 
-This framework provides a modular and extensible architecture for learning and deploying robot manipulation policies.
+Machine learning backbone for the Ark Robotics Framework, providing core models, algorithms, and tools to enable intelligent perception, decision-making, and control in robotic applications.
 
 # Install
 
