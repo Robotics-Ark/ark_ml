@@ -18,3 +18,8 @@ stepper_frequency: 5
 # Default channel config file used by PolicyNode. Override via CLI if needed.
 global_config: "ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml"
 
+# Optional: IO schema for robot-agnostic pack/unpack. If null, uses model-specific utils.
+io_schema: null
+
+# Optional: only return specific observation outputs (e.g., ["state"], "images").
+obs_only: null

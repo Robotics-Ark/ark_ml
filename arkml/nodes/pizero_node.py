@@ -6,7 +6,8 @@ import torch
 from arkml.algos.vla.pizero.models import PiZeroNet
 from arkml.core.policy_node import PolicyNode
 
-from arkml.utils.franka_utils import observation_unpacking, action_packing
+from arkml.utils.franka_utils import observation_unpacking as franka_observation_unpacking, action_packing as franka_action_packing
+from arkml.utils.schema_io import load_io_schema, make_observation_unpacker, make_action_packer
 
 
 class PiZeroPolicyNode(PolicyNode):
@@ -30,12 +31,30 @@ class PiZeroPolicyNode(PolicyNode):
             action_dim=model_cfg.action_dim,
             image_dim=model_cfg.image_dim,
         )
+        # Choose pack/unpack strategy: schema-based (robot-agnostic) or model-specific defaults
+        if getattr(cfg, "io_schema", None):
+            schema = load_io_schema(cfg.io_schema)
+            obs_only = getattr(cfg, "obs_only", None)
+            obs_unpacker = make_observation_unpacker(schema)
+            act_packer = make_action_packer(schema)
+
+            # Bind optional filter via partial by wrapping in a small closure
+            def _obs_unpack_wrapper(obs_dict, obs_keys=None, only=obs_only):
+                return obs_unpacker(obs_dict, obs_keys=obs_keys, only=only)
+
+            observation_unpack_fn = _obs_unpack_wrapper
+            action_pack_fn = act_packer
+        else:
+            # Fall back to existing Franka-specific helpers
+            observation_unpack_fn = franka_observation_unpacking
+            action_pack_fn = franka_action_packing
+
         super().__init__(
             policy=policy,
             device=device,
             policy_name=cfg.policy_node_name,
-            observation_unpacking=observation_unpacking,
-            action_packing=action_packing,
+            observation_unpacking=observation_unpack_fn,
+            action_packing=action_pack_fn,
             stepper_frequency=cfg.stepper_frequency,
             global_config=cfg.global_config,
         )
