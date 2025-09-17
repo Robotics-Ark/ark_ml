@@ -33,7 +33,7 @@ class PiZeroDataset(Dataset):
             raise ValueError("Missing required keyword 'task_prompt'")
         self.pred_horizon = 1  # int(kwargs.pop("pred_horizon", 1))
 
-        super().__init__(dataset_path)
+        super().__init__()
         self.dataset_path = dataset_path
         self.transform = transform or transforms.ToTensor()
 

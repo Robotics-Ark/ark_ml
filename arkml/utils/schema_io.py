@@ -1,34 +1,44 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional
+import importlib
+from pathlib import Path
+from typing import Any
+from collections.abc import Callable
 
 import numpy as np
 import yaml
 
-from arktypes.utils import unpack as _unpack, pack as _pack
+from arktypes.utils import unpack as _unpack, pack
 
 
 # -------------------------
 # Schema loading utilities
 # -------------------------
 
-def load_io_schema(path: str) -> dict:
+
+def load_schema(config_path: str) -> dict:
     """Load a YAML IO schema file.
 
     The schema defines how to unpack observations and pack actions in a
     robot-agnostic way. See the example schema under
     `ark_ml/arkml/examples/franka_pick_place/franka_config/io_schema.yaml`.
     """
-    with open(path, "r") as f:
-        data = yaml.safe_load(f) or {}
-    return data
+    cfg_path = Path(config_path)
+    if cfg_path.exists():
+        with open(cfg_path, "r") as f:
+            cfg_dict = yaml.safe_load(f) or {}
+    else:
+        raise FileNotFoundError(f"Config file could not found {cfg_path}")
+
+    return cfg_dict
 
 
 # -------------------------
 # Observation unpacking
 # -------------------------
 
-def _extract_from_message(msg: Any, using: str, select: str, index: Optional[int] = None):
+
+def _extract_from_message(msg: Any, using: str, select: str, index: int | None = None):
     """Extract a field from an arktypes message using a standard unpacker.
 
     Args:
@@ -47,9 +57,21 @@ def _extract_from_message(msg: Any, using: str, select: str, index: Optional[int
     # Users can extend this by providing schema with explicit `field_idx` later if needed.
     FIELD_MAP = {
         # rigid_body_state(): name, position, orientation, lin_vel, ang_vel
-        "rigid_body_state": {"name": 0, "position": 1, "orientation": 2, "lin_vel": 3, "ang_vel": 4},
+        "rigid_body_state": {
+            "name": 0,
+            "position": 1,
+            "orientation": 2,
+            "lin_vel": 3,
+            "ang_vel": 4,
+        },
         # joint_state(): name, effort, position, velocity, name_to_idx
-        "joint_state": {"name": 0, "effort": 1, "position": 2, "velocity": 3, "name_to_idx": 4},
+        "joint_state": {
+            "name": 0,
+            "effort": 1,
+            "position": 2,
+            "velocity": 3,
+            "name_to_idx": 4,
+        },
         # pose(): position, quaternion
         "pose": {"position": 0, "quaternion": 1},
         # rgbd(): rgb, depth
@@ -57,7 +79,9 @@ def _extract_from_message(msg: Any, using: str, select: str, index: Optional[int
     }
 
     if using not in FIELD_MAP:
-        raise ValueError(f"Unsupported unpacker '{using}'. Extend FIELD_MAP or provide another schema.")
+        raise ValueError(
+            f"Unsupported unpacker '{using}'. Extend FIELD_MAP or provide another schema."
+        )
 
     idx = FIELD_MAP[using].get(select)
     if idx is None:
@@ -65,7 +89,7 @@ def _extract_from_message(msg: Any, using: str, select: str, index: Optional[int
 
     value = out[idx]
 
-    # Optional indexing inside vectors, e.g., a specific joint position
+    # Indexing inside vectors, e.g., a specific joint position
     if index is not None:
         value = np.asarray(value)[index]
 
@@ -85,9 +109,9 @@ def make_observation_unpacker(schema: dict) -> Callable[..., dict[str, Any]]:
 
     def _unpack(
         observation_dict: dict[str, Any],
-        obs_keys: Optional[List[str]] = None,
-        only: Optional["list[str] | str"] = None,
-    ) -> Optional[dict[str, Any]]:
+        obs_keys: list[str] | None = None,
+        only: list[str] | str | None = None,
+    ) -> dict[str, Any] | None:
         if not observation_dict or any(v is None for v in observation_dict.values()):
             return None
 
@@ -116,8 +140,12 @@ def make_observation_unpacker(schema: dict) -> Callable[..., dict[str, Any]]:
 
                     msg = observation_dict.get(ch)
                     if msg is None:
-                        raise KeyError(f"Missing observation channel '{ch}'. Check channel_config and schema.")
-                    val = _extract_from_message(msg, using=using, select=select, index=index)
+                        raise KeyError(
+                            f"Missing observation channel '{ch}'. Check channel_config and schema."
+                        )
+                    val = _extract_from_message(
+                        msg, using=using, select=select, index=index
+                    )
                     if wrap:
                         parts.append([val])
                     else:
@@ -138,8 +166,12 @@ def make_observation_unpacker(schema: dict) -> Callable[..., dict[str, Any]]:
 
                 msg = observation_dict.get(ch)
                 if msg is None:
-                    raise KeyError(f"Missing observation channel '{ch}'. Check channel_config and schema.")
-                val = _extract_from_message(msg, using=using, select=select, index=index)
+                    raise KeyError(
+                        f"Missing observation channel '{ch}'. Check channel_config and schema."
+                    )
+                val = _extract_from_message(
+                    msg, using=using, select=select, index=index
+                )
 
                 if wrap:
                     # Some policies expect a list of images, etc.
@@ -156,6 +188,7 @@ def make_observation_unpacker(schema: dict) -> Callable[..., dict[str, Any]]:
 # Action packing
 # -------------------------
 
+
 def make_action_packer(schema: dict) -> Callable[..., dict[str, Any]]:
     """Create an action packer from schema.
 
@@ -170,24 +203,28 @@ def make_action_packer(schema: dict) -> Callable[..., dict[str, Any]]:
     if using is None or channel is None:
         raise ValueError("Action schema must define both 'using' and 'channel'.")
 
-    def _pack(action: List[float] | np.ndarray, action_keys: Optional[List[str]] = None) -> Dict[str, Any]:
+    def _pack(
+        action: list[float] | np.ndarray, action_keys: list[str] | None = None
+    ) -> dict[str, Any]:
         a = np.asarray(action).tolist()
 
         if using == "task_space_command":
             # Expected fields mapping in schema
             idx = act_schema.get("indices", {})
-            xyz_idx: List[int] = idx.get("xyz", [0, 1, 2])
-            quat_idx: List[int] = idx.get("quat", [3, 4, 5, 6])
+            xyz_idx: list[int] = idx.get("xyz", [0, 1, 2])
+            quat_idx: list[int] = idx.get("quat", [3, 4, 5, 6])
             grip_idx: int = idx.get("gripper", 7)
 
             xyz = np.array([a[i] for i in xyz_idx])
             quat = np.array([a[i] for i in quat_idx])
             grip = a[grip_idx]
 
-            msg = _pack.task_space_command("all", xyz, quat, grip)
+            msg = pack.task_space_command("all", xyz, quat, grip)
             return {channel: msg}
 
-        raise ValueError(f"Unsupported packer '{using}'. Extend implementation as needed.")
+        raise ValueError(
+            f"Unsupported packer '{using}'. Extend implementation as needed."
+        )
 
     return _pack
 

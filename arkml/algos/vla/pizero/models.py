@@ -37,7 +37,6 @@ class PiZeroNet(BasePolicy):
         # LoRA config
         enable_lora: bool = False,
         lora_modules: list = None,
-        # Optional dataset stats (LeRobot-compatible)
         dataset_stats_path: str | None = None,
     ):
         super().__init__()
@@ -65,9 +64,11 @@ class PiZeroNet(BasePolicy):
 
         self._policy = policy_class.from_pretrained(model_path)
 
-
         self._policy.config.input_features = {
-            "observation.images.image": PolicyFeature(
+            "observation.images.image_top": PolicyFeature(
+                type=FeatureType.VISUAL, shape=self.image_dim
+            ),
+            "observation.images.image_wrist": PolicyFeature(
                 type=FeatureType.VISUAL, shape=self.image_dim
             ),
             "observation.state": PolicyFeature(
@@ -77,7 +78,6 @@ class PiZeroNet(BasePolicy):
         self._policy.config.output_features = {
             "action": PolicyFeature(type=FeatureType.ACTION, shape=(self.action_dim,)),
         }
-
 
         if self.is_lora_enabled:
             raise NotImplementedError("Lora policies not implemented yet to VLA.")
@@ -139,15 +139,17 @@ class PiZeroNet(BasePolicy):
                 - "task": str (unchanged)
                 - "action": torch.Tensor on `self.device` (if present)
         """
-        obs = {
-            "observation.images.image": observation["image"].to(self.device),
-            "observation.state": observation["state"].to(self.device),
-            "task": observation["task"],
-        }
-        if "action" in observation:
-            obs["action"] = observation["action"].to(self.device)
-        if "action_is_pad" in observation:
-            obs["action_is_pad"] = observation["action_is_pad"].to(self.device)
+        obs = {}
+        for k, v in observation.items():
+            if k == "state":
+                obs["observation.state"] = observation[k].to(self.device)
+            elif k == "task":
+                obs["task"] = observation[k]
+            elif k == "action" or k == "action_is_pad":
+                obs[k] = observation[k].to(self.device)
+            elif "image" in k:
+                obs[f"observation.images.{k}"] = observation[k].to(self.device)
+
         return obs
 
     def predict(self, obs: dict[str, Any], **kwargs) -> tensor:
@@ -184,7 +186,9 @@ class PiZeroNet(BasePolicy):
             actions.append(self._policy.select_action(obs_prep))
         # Stack to (n, action_dim). select_action returns (batch=1, action_dim) or (action_dim)
 
-        actions = [a.squeeze(0) if a.dim() == 2 and a.size(0) == 1 else a for a in actions]
+        actions = [
+            a.squeeze(0) if a.dim() == 2 and a.size(0) == 1 else a for a in actions
+        ]
         return torch.stack(actions, dim=0)
 
     def get_trainable_params(self) -> list[nn.parameter]:
@@ -258,14 +262,15 @@ class PiZeroNet(BasePolicy):
                 for keys like 'observation.state', 'observation.images.image', 'action'.
         """
 
-
         stats_path = Path(dataset_stats_path)
         if not stats_path.exists():
             raise FileNotFoundError(f"Dataset stats file not found: {stats_path}")
 
         with open(stats_path, "r") as f:
             raw = json.load(f)
-        loaded_stats = {k: {kk: np.array(vv) for kk, vv in d.items()} for k, d in raw.items()}
+        loaded_stats = {
+            k: {kk: np.array(vv) for kk, vv in d.items()} for k, d in raw.items()
+        }
 
         norm_map = getattr(self._policy.config, "normalization_mapping", None)
         if norm_map is None:

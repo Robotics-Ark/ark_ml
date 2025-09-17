@@ -15,6 +15,8 @@ from ark.tools.log import log
 from arktypes import flag_t, string_t
 from torch import nn
 
+from arkml.utils.schema_io import load_schema
+
 
 class PolicyNode(ABC, BaseNode):
     """Abstract base class for policy wrappers with async inference.
@@ -41,12 +43,7 @@ class PolicyNode(ABC, BaseNode):
         super().__init__(policy_name, global_config)
 
         # Channel config to publish and subscribe
-        channel_cfg_path = Path(global_config)
-        if channel_cfg_path.exists():
-            with open(channel_cfg_path, "r") as f:
-                cfg_dict = yaml.safe_load(f) or {}
-        else:
-            raise FileNotFoundError(f"Config file could not found {global_config}")
+        cfg_dict = load_schema(config_path=global_config)
 
         if "channel_config" not in cfg_dict:
             raise ValueError("channel_config must not be empty and properly configured")

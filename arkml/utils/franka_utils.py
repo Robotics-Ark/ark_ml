@@ -27,25 +27,39 @@ def observation_unpacking(observation_dict: dict[str:Any], obs_keys: list[str]):
 
     if not observation_dict or any(v is None for v in observation_dict.values()):
         return None
-    cube_state = observation_dict[obs_keys[0]]
+    source_state = observation_dict[obs_keys[0]]
     target_state = observation_dict[obs_keys[1]]
     joint_state = observation_dict[obs_keys[2]]
     ee_state = observation_dict[obs_keys[3]]
     images = observation_dict[obs_keys[4]]
-    _, cube_position, _, _, _ = unpack.rigid_body_state(cube_state)
-    _, target_position, _, _, _ = unpack.rigid_body_state(target_state)
-    _, _, franka_joint_position, _, _ = unpack.joint_state(joint_state)
-    franka_ee_position, franka_ee_orientation = unpack.pose(ee_state)
+    (
+        source_name,
+        source_position,
+        source_orientation,
+        source_lin_velocity,
+        source_ang_velocity,
+    ) = unpack.rigid_body_state(source_state)
+
+    (
+        target_name,
+        target_position,
+        target_orientation,
+        target_lin_velocity,
+        target_ang_velocity,
+    ) = unpack.rigid_body_state(target_state)
+
+    header, name, position, velocity, effort = unpack.joint_state(joint_state)
+    ee_position, ee_orientation = unpack.pose(ee_state)
     rgb, depth = unpack.rgbd(images)
 
-    gripper_position = franka_joint_position[-2]  # Assuming last two joints are gripper
+    gripper_position = position[-2]  # Assuming last two joints are gripper
 
     state = np.concatenate(
         [
-            np.asarray(cube_position),
+            np.asarray(source_position),
             np.asarray(target_position),
             np.asarray([gripper_position]),
-            np.asarray(franka_ee_position),
+            np.asarray(ee_position),
         ]
     )
 

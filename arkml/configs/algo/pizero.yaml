@@ -4,7 +4,7 @@ model:
   name: PiZeroNet
   policy_type: pi0            # 'pi0' or 'smolvla'
   model_path: lerobot/pi0
-  obs_dim: 10
+  obs_dim: 9
   action_dim: 8         # Action dimension
   obs_horizon: 1        # Observation dimension
   pred_horizon: 1

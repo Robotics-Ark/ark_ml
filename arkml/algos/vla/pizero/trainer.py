@@ -141,7 +141,7 @@ class PiZeroTrainer(Trainer):
             print(f"[epoch {epoch + 1}] avg_loss={avg_loss:.6f}")
 
             # --- Checkpoint logic ---
-            if 1:  # avg_loss < best_loss:
+            if 1:  # avg_loss < best_loss: # TODO
                 print(
                     f"[epoch {epoch + 1}] New best loss {avg_loss:.6f} (prev {best_loss:.6f})"
                 )

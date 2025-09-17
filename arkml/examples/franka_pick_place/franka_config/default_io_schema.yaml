@@ -3,25 +3,25 @@ observation:
     state:
       concat:
         # Cube position
-        - from: cube/ground_truth/sim
-          using: rigid_body_state
-          select: position
+#        - from: cube/ground_truth/sim
+#          using: rigid_body_state
+#          select: position
         # Target position
-        - from: target/ground_truth/sim
-          using: rigid_body_state
-          select: position
+#        - from: target/ground_truth/sim
+#          using: rigid_body_state
+#          select: position
         # Gripper opening from joint positions (use the second last joint as in current utils)
         - from: franka/joint_states/sim
           using: joint_state
           select: position
-          index: -2
+#          index: -2
         # End-effector position
-        - from: franka/ee_state/sim
-          using: pose
-          select: position
+#        - from: franka/ee_state/sim
+#          using: pose
+#          select: position
 
     # Return images as a list for downstream policy that expects a batch-like list
-    images:
+    images_top: # all images should  start with image string
       from: IntelRealSense/rgbd/sim
       using: rgbd
       select: rgb

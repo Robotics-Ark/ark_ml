@@ -78,7 +78,7 @@ def _filter_kwargs_for_constructor(
     return accepted, ignored, missing
 
 
-def build_model(model_cfg: DictConfig | Mapping[str, Any]):
+def build_model(model_cfg: DictConfig | dict[str, Any]):
     model_name, params = _normalize_model_cfg(model_cfg)
     model_cls = MODELS.get(model_name)
 
