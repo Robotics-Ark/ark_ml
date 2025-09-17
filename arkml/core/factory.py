@@ -1,12 +1,12 @@
 import ast
 import inspect
-from typing import Any, Dict, Mapping, Tuple
+from typing import Any
 
 from arkml.core.registry import MODELS
 from omegaconf import DictConfig, OmegaConf
 
 
-def _to_plain_dict(cfg: DictConfig | Mapping[str, Any]) -> Dict[str, Any]:
+def _to_plain_dict(cfg: DictConfig | dict[str, Any]) -> dict[str, Any]:
     if isinstance(cfg, DictConfig):
         return OmegaConf.to_container(cfg, resolve=True)  # type: ignore[return-value]
     return dict(cfg)
@@ -24,15 +24,15 @@ def _normalise_shape(shape_dim: str):
 
 
 def _normalize_model_cfg(
-    model_cfg: DictConfig | Mapping[str, Any],
-) -> Tuple[str, Dict[str, Any]]:
+    model_cfg: DictConfig | dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
     d = _to_plain_dict(model_cfg["model"])
     model_name = d.get("name") or d.get("type")
     if not model_name:
         raise KeyError("Model config must include 'name' or 'type'.")
 
     # Start with flat params (minus control keys)
-    params: Dict[str, Any] = {k: v for k, v in d.items() if k not in ("name", "type")}
+    params: dict[str, Any] = {k: v for k, v in d.items() if k not in ("name", "type")}
     # If nested block exists under the model name, merge it on top
     nested = d.get(model_name)
     if isinstance(nested, dict):
@@ -48,8 +48,8 @@ def _normalize_model_cfg(
 
 
 def _filter_kwargs_for_constructor(
-    cls: type, params: Dict[str, Any]
-) -> Tuple[Dict[str, Any], Dict[str, Any], list[str]]:
+    cls: type, params: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
     sig = inspect.signature(cls.__init__)
     accepted_names = {
         p.name

@@ -1,33 +1,23 @@
-import asyncio
-import json
+import argparse
 import time
 from typing import Any
 
-import hydra
-import torch
-from ark.client.comm_infrastructure.instance_node import InstanceNode
-from arkml.examples.franka_pick_place.franka_pick_place_env import RobotEnv
+import numpy as np
+from ark.env.ark_env import ArkEnv
+from arktypes import flag_t, string_t
 from arktypes import (
     task_space_command_t,
     pose_t,
     joint_state_t,
     rigid_body_state_t,
     rgbd_t,
-    string_t,
 )
 from arktypes.utils import unpack
-from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 
 
 def default_channels() -> dict[str, dict[str, type]]:
-    """Return default action/observation channel mappings for simulator.
-
-    Returns:
-      Dict[str, dict[str, type]]: A dictionary with two keys:
-        - "actions": mapping from action channel name to its type.
-        - "observations": mapping from observation channel name to its type.
-    """
+    """Default action/observation channels for the Franka + cube sim."""
     action_channels: dict[str, type] = {
         "franka/cartesian_command/sim": task_space_command_t,
     }
@@ -41,267 +31,195 @@ def default_channels() -> dict[str, dict[str, type]]:
     return {"actions": action_channels, "observations": observation_channels}
 
 
-class RobotNode(InstanceNode):
-    """Manages env-policy interactions.
+class RobotNode(ArkEnv):
 
-    Args:
-      env: Environment object.
-      policy_node: Policy wrapper.
-      obs_horizon: Number of most recent observations to stack for the policy.
-    """
-
-    def __init__(self, env, obs_horizon):
-        super().__init__("Robot")
-        self.env = env
-        self.obs_horizon = obs_horizon
-        self.obs_history = []
-        self.truncated = None
-        self.terminated = None
-        self.next_command = None
-        self.obs_pub = self.create_publisher("observation", string_t)
-        self.action_sub = self.create_subscriber(
-            "next_action", task_space_command_t, self.callback
+    def __init__(self):
+        config = (
+            "/Users/abhineetkumar/arkprojects/ark_diffusion_policies_on_franka/diffusion_policy/config/global_config.yaml"
         )
-        self.create_stepper(10, self.step)
-        self.current_step = 0
-        self.episode_started = False
-
-    def reset(self):
-        """Reset environment and bootstrap observation history.
-
-        Returns:
-          ``(obs, info)`` as returned by ``env.reset()``
-        """
-        obs, info = self.env.reset()
-        self.obs_history = [obs] * self.obs_horizon  # bootstrap with repeated obs
-        self.current_step = 0
-        self.truncated = None
-        self.terminated = None
-        self.next_command = None
-        self.episode_started = False
-        self.action_sub.suspend()
-        time.sleep(0.1)
-        self.action_sub.restart()
-        return obs, info
-
-    def callback(self, t, channel_name, msg):
-        # Convert incoming task-space command into 8D action vector
-        name, pos, quat, grip = unpack.task_space_command(msg)
-        self.next_command = [
-            float(pos[0]),
-            float(pos[1]),
-            float(pos[2]),
-            float(quat[0]),
-            float(quat[1]),
-            float(quat[2]),
-            float(quat[3]),
-            float(grip),
-        ]
-
-    def step(self):
-        """Step the environment once and update history.
-
-        Args:
-          action: Action to apply to the environment.
-
-        Returns:
-          ``(obs, reward, terminated, truncated, info)`` from the env.
-        """
-        if self.next_command is None or not self.episode_started:
-            return
-        obs, reward, self.terminated, self.truncated, self.current_step = self.env.step(
-            self.next_command
-        )
-        self.obs_history.append(obs)
-        if len(self.obs_history) > self.obs_horizon:
-            self.obs_history.pop(0)  # keep window size fixe
-
-    def get_obs_sequence(self, task_prompt: str):
-        """Prepare a stacked observation batch for the policy.
-
-        Args:
-          task_prompt: Natural language instruction to include in the batch.
-
-        Returns:
-          Prepared observation batch, typically containing keys like
-          ``image`` (Tensor ``[B,C,H,W]``), ``state`` (Tensor ``[B,D]``), and
-          ``task`` (list of length ``B``).
-        """
-        obs_history = self.obs_history[-self.obs_horizon :]
-        return self.prepare_observations(
-            observations=obs_history, task_prompt=task_prompt
+        chans = default_channels()
+        super().__init__(
+            environment_name="diffusion_env",
+            action_channels=chans["actions"],
+            observation_channels=chans["observations"],
+            global_config=config,
+            sim=True,
         )
 
-    @staticmethod
-    def prepare_observations(observations: list[dict[str, Any]], task_prompt: str):
-        """Convert raw env observations into a batched policy input.
+    def action_packing(self, action: Any) -> dict[str, Any]:
+        """!Serialize an action.
+
+        This method converts the high level action passed to :func:`step` into
+        a dictionary that can be published over LCM.  The dictionary keys are
+        channel names and the values are already packed LCM messages.
+
+        @param action The high level action provided by the agent.
+        @return A mapping from channel names to packed LCM messages.
+        @rtype Dict[str, Any]
+        """
+        ...
+
+    def observation_unpacking(self, observation_dict: dict[str, Any]) -> Any:
+        """!Deserialize observations."""
+        ...
+
+    def terminated_truncated_info(
+        self, state: Any, action: Any, next_state: Any
+    ) -> tuple[bool, bool, Any]:
+        """!Evaluate episode status."""
+        return False, False, None
+
+    def reward(self, state: Any, action: Any, next_state: Any) -> float:
+        """Compute the reward for a transition"""
+        ...
+
+    def check_success(self, cube_pos, target_pos):
+        """Compute termination and truncation from the current state.
+
+        Supports both legacy dict states with ``cube``/``target`` entries and a
+        flat vector layout ``[cube(3), target(3), gripper(1), ee(3)]``.
 
         Args:
-          observations: List of observation dicts from the env. Each dict is
-            expected to contain keys ``images`` (tuple with RGB as HxWxC),
-            ``cube``, ``target``, ``gripper``, and ``franka_ee``.
-          task_prompt: Natural language task description to include in the
-            batch.
+          state: Current state (dict or flat vector).
+          action: Applied action (unused).
+          next_state: Next state (unused).
 
         Returns:
-          A batch dictionary with:
-            - ``image``: ``torch.FloatTensor`` of shape ``[B, C, H, W]``.
-            - ``state``: ``torch.FloatTensor`` of shape ``[B, D]``.
-            - ``task``: ``list[str]`` repeated across the batch (length ~= ``B``).
+          tuple: ``(terminated, truncated, steps)`` where ``terminated`` is
+          True if cube is within 0.1m of target; ``truncated`` is True if
+          ``max_steps`` reached; and ``steps`` is current step count.
         """
-        imgs = []
-        states = []
-        obs = {}
-        for ob in observations:
-            # ---- Image ----
-            img = ob["images"][0]  # (H, W, C)
-            img = torch.from_numpy(img.copy()).permute(2, 0, 1)  # (C, H, W)
-            img = img.float() / 255.0
-            imgs.append(img)
 
-            # ---- State ----
-            state = []
-            state.extend(list(ob["cube"]))
-            state.extend(list(ob["target"]))
-            state.extend(list(ob["gripper"]))
-            state.extend(list(ob["franka_ee"][0]))
-            states.append(torch.tensor(state, dtype=torch.float32))
+        distance = np.linalg.norm(cube_pos - target_pos)
+        terminated = bool(distance < 0.2)
+        return (terminated,)
 
-        obs["image"] = torch.stack(imgs, dim=0)
-        obs["state"] = torch.stack(states, dim=0)
-        obs["task"] = [task_prompt] * obs["state"].shape[0]
-        return obs
+    def reset_objects(self):
+        """Reset key scene objects and internal step counter."""
+        self.steps = 0
+        self.reset_component("cube")
+        self.reset_component("target")
+        self.reset_component("franka")
 
-    async def run_episode(
-        self,
-        max_steps: int,
-        obs_horizon: int,
-        action_horizon: int,
-        step_sleep: float,
-        task_prompt: str,
-    ):
-        """Run one episode using the current policy and environment.
+    def reset_scene(self) -> None:
+        """Minimal scene bootstrap: reset objects and exit.
 
-        Args:
-          max_steps: Maximum number of env steps to execute.
-          obs_horizon: TODO
-          action_horizon: Number of actions to apply from a predicted sequence.
-          step_sleep: Optional delay (seconds) between executed actions.
-          start_offset: Index into the predicted sequence to start from.
-          task_prompt: Natural language instruction to include in observations.
-
-        Returns:
-          ``(obs_history, terminated, truncated)`` where
-          ``obs_history`` is the internal observation buffer, and the booleans
-          indicate episode termination status.
+        This script no longer bridges observations/actions. The PolicyNode handles
+        that directly. We only ensure the scene is reset and ready.
         """
-        _, _ = self.reset()
-        await asyncio.sleep(10)
-        for n_step in tqdm(
-            range(max_steps), desc="Steps:"
-        ):  # TODO Steps count from env is different from steps refered here
-            # Prepare current observation batch for the policy
-            model_input = self.get_obs_sequence(task_prompt=task_prompt)
-            self.truncated = n_step == max_steps - 1
-            # Serialize observation to JSON (lists) and publish on generic channel
-            payload = {
-                "image": (
-                    model_input.get("image").tolist()
-                    if "image" in model_input
-                    else None
-                ),
-                "state": (
-                    model_input.get("state").tolist()
-                    if "state" in model_input
-                    else None
-                ),
-                "task": model_input.get("task", []),
-                "episode_over": (self.terminated or self.truncated),
-            }
-            obs_msg = string_t()
-            obs_msg.data = json.dumps(payload)
-            self.obs_pub.publish(obs_msg)
-            if n_step == 0:
-                self.episode_started = True
 
-            # Stepper advances env asynchronously via next_action
-            if self.truncated or self.terminated:
-                break
+        # Reset the policy node state at the beginning of the episode
+        try:
 
-        self.truncated = True
-        self.episode_started = False
-        return self.terminated, self.truncated
+            self.send_service_request(
+                service_name="Policy/policy/reset",
+                request=flag_t(),
+                response_type=string_t,
+            )
+            self.reset()
+
+        except Exception as e:
+            print(f"Warning: Failed to reset policy via service: {e}")
+        # Give subsystems a moment to settle
+        time.sleep(1.0)
 
 
-async def run_all_episodes(robot_node, cfg, obs_horizon, action_horizon, step_sleep):
-    n_episodes = int(getattr(cfg, "n_episodes"))
-    success_count = 0
-
-    for ep in range(n_episodes):
-        print(f"\n=== Episode {ep} ===")
-        terminated, truncated = await robot_node.run_episode(
-            max_steps=int(getattr(cfg, "max_steps")),
-            obs_horizon=obs_horizon,
-            action_horizon=action_horizon,
-            task_prompt=cfg.task_prompt,
-            step_sleep=step_sleep,
-        )
-        if terminated:
-            success_count += 1
-            print(f"SUCCESS: Episode {ep}")
-        else:
-            print(f"FAILED: Episode {ep}")
-
-        await asyncio.sleep(step_sleep)
-
-    print(f"\nTotal successful episodes: {success_count}/{n_episodes}")
-
-
-@hydra.main(
-    config_path="../../configs", config_name="defaults.yaml", version_base="1.3"
-)
-def main(cfg: DictConfig) -> None:
+def main() -> None:
     """Run rollouts for a configured policy.
 
     Args:
       cfg: Hydra configuration composed of ``defaults.yaml`` and overrides.
-        Expected keys include:
-        - sim_config (str): Path to the Ark global sim config.
-        - environment_name (str): Environment identifier.
-        - algo (DictConfig): Algorithm group with ``name`` and ``model``.
-        - n_episodes (int): Number of episodes to evaluate.
-        - task_prompt (str, optional): Task string for language policies.
 
     Returns:
       None. Prints progress and a final success summary to stdout.
     """
-    sim_config = "./sim_config/global_config.yaml"
-    environment_name = "diffusion_env"
 
-    print("Config:\n", OmegaConf.to_yaml(cfg))
-
-    step_sleep = float(getattr(cfg, "step_sleep", 0.5))
-
-    # Environment
-    chans = default_channels()
-    env = RobotEnv(
-        config=sim_config,
-        environment_name=environment_name,
-        action_channels=chans["actions"],
-        observation_channels=chans["observations"],
-        max_steps=int(getattr(cfg, "max_steps")) * 2,
-        step_sleep=step_sleep,
-        sim=True,
+    parser = argparse.ArgumentParser(
+        description="Run rollouts for a configured policy."
+    )
+    parser.add_argument(
+        "--step_sleep",
+        type=float,
+        default=0.1,
+        help="Sleep time between steps (default: 0.1s)",
+    )
+    parser.add_argument(
+        "--n_episodes",
+        type=int,
+        default=3,
+        help="Number of episodes to run (default: 3)",
+    )
+    parser.add_argument(
+        "--max_step",
+        type=int,
+        default=500,
+        help="Maximum number of steps per episode (default: 500)",
     )
 
-    # Robot node to manage history and interaction
-    obs_horizon = cfg.algo.model.get("obs_horizon")
-    action_horizon = cfg.algo.model.get("action_horizon")
-    robot_node = RobotNode(env=env, obs_horizon=obs_horizon)
+    args = parser.parse_args()
 
-    asyncio.run(
-        run_all_episodes(robot_node, cfg, obs_horizon, action_horizon, step_sleep)
-    )
+    step_sleep = args.step_sleep
+    n_episodes = args.n_episodes
+    max_step = args.max_step
+
+    robo_node = RobotNode()
+
+    success_count = 0
+    failure_count = 0
+
+    for ep in tqdm(range(n_episodes), desc="Episodes", unit="ep"):
+        robo_node.reset_scene()
+        success = False
+        time.sleep(5)
+        robo_node.send_service_request(
+            service_name="Policy/policy/start",
+            request=flag_t(),
+            response_type=flag_t,
+        )
+        for step_count in tqdm(
+            range(max_step + 1), desc=f"Ep {ep}", unit="step", leave=False
+        ):
+            robo_node.observation_space.wait_until_observation_space_is_ready()
+            obs_dict = robo_node.observation_space.get_observation()
+            if obs_dict is None:
+                time.sleep(step_sleep)
+                continue
+
+            cube_state = obs_dict["cube/ground_truth/sim"]
+            target_state = obs_dict["target/ground_truth/sim"]
+
+            if not obs_dict or any(v is None for v in obs_dict.values()):
+                continue
+
+            _, cube_position, _, _, _ = unpack.rigid_body_state(cube_state)
+            _, target_position, _, _, _ = unpack.rigid_body_state(target_state)
+
+            terminated = robo_node.check_success(cube_position, target_position)
+            if terminated:
+                success = True
+                break
+
+            step_count += 1
+            time.sleep(step_sleep)
+
+        robo_node.send_service_request(
+            service_name="Policy/policy/stop",
+            request=flag_t(),
+            response_type=flag_t,
+        )
+        if success:
+            success_count += 1
+        else:
+            failure_count += 1
+
+    # After all episodes
+    success_rate = success_count / n_episodes * 100
+
+    print("\n=== Results ===")
+    print(f"Total Episodes : {n_episodes}")
+    print(f"Successes      : {success_count}")
+    print(f"Failures       : {failure_count}")
+    print(f"Success Rate   : {success_rate:.2f}%")
 
 
 if __name__ == "__main__":

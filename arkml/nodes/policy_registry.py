@@ -1,4 +1,4 @@
-from typing import Callable
+from collections.abc import Callable
 
 import torch
 from omegaconf import DictConfig
@@ -56,12 +56,16 @@ def get_policy_node(cfg: DictConfig, device: torch.device):
         raise NotImplementedError(
             f"No policy builder registered for key '{key}'. Available: {list(_POLICY_BUILDERS.keys())}"
         )
+    global_config = getattr(cfg, "global_config", None)
     return builder(cfg, device)
 
 
 @register_policy("pizero")
 @register_policy("pi0")
-def _build_pizero(cfg: DictConfig, device: torch.device):
+def _build_pizero(
+    cfg: DictConfig,
+    device: torch.device,
+):
     """Build and return a PiZero policy node from config.
 
     Args:
@@ -72,13 +76,24 @@ def _build_pizero(cfg: DictConfig, device: torch.device):
       Configured PiZeroPolicyNode  instance.
     """
     from arkml.nodes.pizero_node import PiZeroPolicyNode
-    return PiZeroPolicyNode(model_cfg=cfg.algo.model, device=str(device))
+
+    return PiZeroPolicyNode(
+        cfg=cfg,
+        device=device,
+    )
 
 
 @register_policy("smolvla")
-def _build_smolvla(cfg: DictConfig, device: torch.device):
+def _build_smolvla(
+    cfg: DictConfig,
+    device: torch.device,
+):
     """Build and return SmolVLA that reuses the PiZero builder."""
-    return _build_pizero(cfg, device)
+    return _build_pizero(
+        cfg=cfg,
+        device=device,
+    )
+
 
 @register_policy("action_chunking_transformer")
 def _build_ACTransformer(cfg: DictConfig, device: torch.device):

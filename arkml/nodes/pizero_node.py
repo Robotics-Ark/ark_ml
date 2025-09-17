@@ -1,22 +1,28 @@
 from collections import deque
+from typing import Any
 
 import numpy as np
 import torch
 from arkml.algos.vla.pizero.models import PiZeroNet
 from arkml.core.policy_node import PolicyNode
-from arktypes import task_space_command_t, string_t
-from arktypes.utils import pack
+
+from arkml.utils.franka_utils import observation_unpacking, action_packing
 
 
 class PiZeroPolicyNode(PolicyNode):
-    """Wrapper node for PiZero/SmolVLA.
+    """Wrapper node for PiZero
 
     Args:
       model_cfg: Model configurations.
       device: Target device string (e.g., ``"cuda"`` or ``"cpu"``).
     """
 
-    def __init__(self, model_cfg, device="cuda", global_config=None):
+    def __init__(
+        self,
+        cfg,
+        device: str,
+    ):
+        model_cfg = cfg.algo.model
         policy = PiZeroNet(
             policy_type=model_cfg.policy_type,
             model_path=model_cfg.model_path,
@@ -27,15 +33,18 @@ class PiZeroPolicyNode(PolicyNode):
         super().__init__(
             policy=policy,
             device=device,
-            channel_type=string_t,
-            message_type=task_space_command_t,
-            global_config=global_config,
+            policy_name=cfg.policy_node_name,
+            observation_unpacking=observation_unpacking,
+            action_packing=action_packing,
+            stepper_frequency=cfg.stepper_frequency,
+            global_config=cfg.global_config,
         )
 
         self.policy.to_device(device)
         self.policy.reset()
         self.policy.set_eval_mode()
         self.create_stepper(10, self.step)
+        self.task_prompt = model_cfg.task_prompt
 
         # Inference chunking: number of actions to prefetch from the model when queue is empty
         self.n_infer_actions = getattr(model_cfg, "pred_horizon", 10)
@@ -44,6 +53,33 @@ class PiZeroPolicyNode(PolicyNode):
     def _on_reset(self):
         """Clear any prefetched actions when an episode ends."""
         self._action_queue.clear()
+
+    def prepare_observation(self, ob: dict[str, Any]):
+        """Convert a single raw env observation into a batched policy input.
+
+        Args:
+          ob: Single observation dict from the env. Expected to contain keys:
+            ``images`` (tuple with RGB as HxWxC),
+            ``cube``, ``target``, ``gripper``, and ``franka_ee``.
+          task_prompt: Natural language task description to include in the batch.
+
+        Returns:
+          A batch dictionary with:
+            - ``image``: ``torch.FloatTensor`` of shape ``[1, C, H, W]``.
+            - ``state``: ``torch.FloatTensor`` of shape ``[1, D]``.
+            - ``task``: ``list[str]`` of length 1.
+        """
+        # ---- Image ----
+        img = torch.from_numpy(ob["images"][0].copy()).permute(2, 0, 1)  # (C, H, W)
+        img = img.float().div(255.0).unsqueeze(0)  # (1, C, H, W)
+
+        # ---- State ----
+        state = torch.from_numpy(ob["state"]).float().unsqueeze(0)  # (1, D)
+
+        return {
+            "image": img,
+            "state": state,
+        }
 
     def predict(self, obs_seq):
         """Compute the action for the given observation batch.
@@ -61,13 +97,12 @@ class PiZeroPolicyNode(PolicyNode):
         """
 
         # Convert to tensors in the expected shapes
-        obs = {}
-        if "image" in obs_seq and obs_seq["image"] is not None:
-            obs["image"] = torch.tensor(obs_seq["image"], dtype=torch.float32)
-        if "state" in obs_seq and obs_seq["state"] is not None:
-            obs["state"] = torch.tensor(obs_seq["state"], dtype=torch.float32)
-        if "task" in obs_seq:
-            obs["task"] = obs_seq["task"]
+        obs_seq = self.prepare_observation(obs_seq)
+        obs = {
+            "image": torch.tensor(obs_seq["image"], dtype=torch.float32),
+            "state": torch.tensor(obs_seq["state"], dtype=torch.float32),
+            "task": [self.task_prompt],
+        }
 
         # Serve one action per call. If queue is empty, prefetch n actions.
         if len(self._action_queue) == 0:
@@ -80,14 +115,3 @@ class PiZeroPolicyNode(PolicyNode):
                 self._action_queue.append(actions[i])
 
         return self._action_queue.popleft()
-
-    def publish_action(self, action: np.ndarray):
-        """Pack and publish action to downstream consumers."""
-        if action is None or action.shape[0] < 8:
-            return
-
-        xyz = np.asarray(action[:3], dtype=np.float32)
-        quat = np.asarray(action[3:7], dtype=np.float32)
-        grip = float(action[7])
-        msg = pack.task_space_command("next_action", xyz, quat, grip)
-        self.pub.publish(msg)

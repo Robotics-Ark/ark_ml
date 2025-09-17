@@ -6,6 +6,9 @@ model:
   action_dim: 8
   obs_horizon: 1
   checkpoint: "/Users/abhineetkumar/arkprojects/act-training/best1.pt"
+  stepper_frequency: 5
+  global_config: "/Users/abhineetkumar/actml/ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml"
+  policy_node_name: Policy
 
 
 trainer:

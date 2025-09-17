@@ -1,13 +1,19 @@
+import importlib
 import threading
-import queue
-import numpy as np
+import time
 from abc import abstractmethod, ABC
+from collections.abc import Callable
+from functools import partial
+from pathlib import Path
 from typing import Any
-from torch import nn
-import json
 
-
+import numpy as np
+import yaml
 from ark.client.comm_infrastructure.base_node import BaseNode
+from ark.env.spaces import ActionSpace, ObservationSpace
+from ark.tools.log import log
+from arktypes import flag_t, string_t
+from torch import nn
 
 
 class PolicyNode(ABC, BaseNode):
@@ -16,31 +22,74 @@ class PolicyNode(ABC, BaseNode):
     Args:
       policy: Underlying policy module to be executed.
       device: Target device identifier (e.g., ``"cpu"``, ``"cuda"``).
+      observation_unpacking: Function to unpack observations.
+      action_packing: Function to pack actions.
+      stepper_frequency: Frequency of stepper.
+      global_config: Global configuration path of the simulator or robot
     """
 
     def __init__(
         self,
         policy: nn.Module,
+        policy_name: str,
         device: str,
-        channel_type,
-        message_type,
+        observation_unpacking: Callable,
+        action_packing: Callable,
+        stepper_frequency: int,
         global_config=None,
     ):
-        super().__init__("Policy", global_config)
+        super().__init__(policy_name, global_config)
 
-        # Publishers/subscribers
-        self.pub = self.create_publisher("next_action", message_type)
-        self.create_subscriber("observation", channel_type, self.callback)
+        # Channel config to publish and subscribe
+        channel_cfg_path = Path(global_config)
+        if channel_cfg_path.exists():
+            with open(channel_cfg_path, "r") as f:
+                cfg_dict = yaml.safe_load(f) or {}
+        else:
+            raise FileNotFoundError(f"Config file could not found {global_config}")
+
+        if "channel_config" not in cfg_dict:
+            raise ValueError("channel_config must not be empty and properly configured")
+
+        channel_config = cfg_dict["channel_config"]
+        observation_channels = channel_config.get("observation_channels", {})
+        action_channels = channel_config.get("action_channels", {})
+
+        obs_keys = list(observation_channels.keys())
+        action_keys = list(action_channels.keys())
+
+        self.observation_unpacking = partial(observation_unpacking, obs_keys=obs_keys)
+        self.action_packing = partial(action_packing, action_keys=action_keys)
+
+        obs_channels = self._resolve_channel_types(observation_channels)
+
+        act_channels = self._resolve_channel_types(action_channels)
+
+        if not obs_channels:
+            raise NotImplementedError("No observation channels found")
+
+        if not act_channels:
+            raise NotImplementedError("No action channels found")
+
+        self.action_space = ActionSpace(act_channels, self.action_packing, self._lcm)
+        self.observation_space = ObservationSpace(
+            obs_channels, self.observation_unpacking, self._lcm
+        )
+
+        self._multi_comm_handlers.append(self.action_space.action_space_publisher)
+        self._multi_comm_handlers.append(
+            self.observation_space.observation_space_listener
+        )
 
         # Policy setup
         self.policy = policy
         self.policy.to_device(device=device)
         self.policy.set_eval_mode()
-
-        # Async inference infra
-        self.obs_queue = queue.Queue(maxsize=1)  # only keep latest obs
         self.latest_action = None
+        self._stop_service = True
+        self._resetting = False
         self._stop_event = threading.Event()
+        self._publish_lock = threading.Lock()
 
         self.worker_thread = threading.Thread(
             target=self._inference_worker, daemon=True
@@ -48,67 +97,118 @@ class PolicyNode(ABC, BaseNode):
         self.worker_thread.start()
 
         # Stepper publishes actions at fixed control frequency
-        self.create_stepper(5, self.step)
+        self.create_stepper(stepper_frequency, self.step)
+
+        # Create services - start, stop and reset policy state
+        self._start_service_name = f"{self.name}/policy/start"
+        self._stop_service_name = f"{self.name}/policy/stop"
+        self._reset_service_name = f"{self.name}/policy/reset"
+
+        # start
+        self.create_service(
+            self._start_service_name, flag_t, flag_t, self._callback_start_service
+        )
+        # stop
+        self.create_service(
+            self._stop_service_name, flag_t, flag_t, self._callback_stop_service
+        )
+        # reset
+        self.create_service(
+            self._reset_service_name, flag_t, flag_t, self._callback_reset_service
+        )
 
     def _inference_worker(self):
         """Background thread to run model inference asynchronously."""
         while not self._stop_event.is_set():
-            try:
-                obs_seq = self.obs_queue.get(timeout=0.1)
-            except queue.Empty:
+            if self._stop_service:
+                self.latest_action = None
+                time.sleep(0.05)
                 continue
-
-            action = self.predict(obs_seq)
-            self.latest_action = action
+            self.observation_space.wait_until_observation_space_is_ready()
+            obs = self.observation_space.get_observation()
+            if obs is not None:
+                action = self.predict(obs)
+                log.info(f"[ACTION PREDICTED] : {action}")
+                self.latest_action = action
 
     def reset(self) -> None:
         """Reset the internal state of the policy."""
-        self.policy.reset()
-        self.latest_action = None
-        # Clear any queued observations
-        with self.obs_queue.mutex:
-            self.obs_queue.queue.clear()
-        # Allow subclasses to clear their own buffers
-        reset_hook = getattr(self, "_on_reset", None)
-        if callable(reset_hook):
-            reset_hook()
+        # Block publishing immediately and clear any pending action
+        with self._publish_lock:
+            self._stop_service = True
+            self._resetting = True
+            self.observation_space.is_ready = False
+            self.suspend_communications(services=False)
+            self.latest_action = None
+            self.policy.reset()
+            # Allow subclasses to clear their own buffers
+            reset_hook = getattr(self, "_on_reset", None)
+            if callable(reset_hook):
+                reset_hook()
+        self.resume_communications(services=False)
+        self.observation_space.wait_until_observation_space_is_ready()
+        _ = self.observation_space.get_observation()
+        self._resetting = False
 
-    def callback(self, t, channel_name, msg):
-        """Subscriber callback for new observations."""
-        # Drop old obs
+    def _callback_reset_service(self, channel, msg) -> string_t:
+        """Service callback to reset policy state."""
+        log.info(f"[INFO] Received callback reset service")
+        reset_status = string_t()
         try:
-            self.obs_queue.get_nowait()
-        except queue.Empty:
-            pass
-
-        if isinstance(msg, str):
-            payload = json.loads(msg)
-        elif hasattr(msg, "data") and isinstance(msg.data, str):
-            payload = json.loads(msg.data)
-        elif isinstance(msg, dict):
-            payload = msg
-        else:
-            raise ValueError("Unsupported observation format")
-
-        if "episode_over" in payload and payload["episode_over"]:
             self.reset()
-            print("[EPISODE OVER]: Current episode is over")
-        else:
-            self.obs_queue.put_nowait(payload)
+            reset_status.data = "Successfully reset policy state"
+            log.info(f"[INFO] Finished callback reset service")
+        except Exception as e:
+            reset_status.data = f"Failed to reset policy state: {e}"
+            log.error(f"[ERROR] Failed to reset policy state: {e}")
+        return reset_status
+
+    def _callback_start_service(self, channel, msg) -> flag_t:
+        """Start policy prediction service"""
+        log.info(f"[INFO] Received callback to start service")
+        self._stop_service = False
+        return flag_t()
+
+    def _callback_stop_service(self, channel, msg) -> flag_t:
+        """Stop policy prediction service"""
+        log.info(f"[INFO] Received callback to stop service")
+        self._stop_service = True
+        return flag_t()
 
     def step(self):
         """Stepper loop: publish latest action if available."""
-        if self.latest_action is None:
-            return
-        print(f"[ACTION PREDICTED] : {self.latest_action}")
-        self.publish_action(self.latest_action)
-        self.latest_action = None
+        with self._publish_lock:
+            if self._stop_service or self.latest_action is None or self._resetting:
+                return
+            self.publish_action(self.latest_action)
+            self.latest_action = None
 
     def publish_action(self, action: np.ndarray):
-        """Publish action message. Subclasses may override for custom packing."""
-        ...
+        """Pack and publish action to downstream consumers."""
+        if action is None:
+            return
+
+        self.action_space.pack_and_publish(action)
 
     @abstractmethod
     def predict(self, obs_seq: dict[str, Any]) -> np.ndarray:
         """Compute the action(s) from observations."""
         ...
+
+    @staticmethod
+    def _resolve_channel_types(mapping: dict[str, Any]) -> dict[str, type]:
+        """Resolve type names from config into arktypes classes.
+
+        Accepts either already-imported classes or string names present in the
+        ``arktypes`` package. Returns a mapping of channel name to type.
+        """
+        if not mapping:
+            return {}
+        resolved: dict[str, type] = {}
+        arktypes_mod = importlib.import_module("arktypes")
+        for ch_name, t in mapping.items():
+            if isinstance(t, str):
+                resolved[ch_name] = getattr(arktypes_mod, t)
+            else:
+                resolved[ch_name] = t
+        return resolved

@@ -4,11 +4,11 @@ from typing import Any
 
 import torch
 from PIL import Image
-from arkml.core.dataset import ArkDataset
+from torch.utils.data import Dataset
 from torchvision import transforms
 
 
-class PiZeroDataset(ArkDataset):
+class PiZeroDataset(Dataset):
     """
     Lazy-loading dataset for PiZero trajectories stored as pickled files.
     Scans a directory of ``.pkl`` files and builds an in-memory index mapping each

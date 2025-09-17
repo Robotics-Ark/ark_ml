@@ -1,5 +1,3 @@
-import pdb
-
 import numpy as np
 import torch
 from torchvision import transforms as T
@@ -9,6 +7,8 @@ from arktypes import task_space_command_t, string_t
 
 from arkml.algos.ACTransformer.models import ACT
 from arkml.core.policy_node import PolicyNode
+from typing import Any
+from arkml.utils.franka_utils import observation_unpacking, action_packing
 
 import numpy as np
 from PIL import Image
@@ -43,9 +43,8 @@ class ActPolicyNode(PolicyNode):
         model_cfg,
         device="cpu",
         chunk_size=50,
-        action_stride=1,
+        action_stride=8,
         image_size=256,
-        global_config=None,
     ):
         """
         Returns `actions_to_exec` from predict()
@@ -66,13 +65,16 @@ class ActPolicyNode(PolicyNode):
         super().__init__(
             policy=policy,
             device=device,
-            channel_type=string_t,
-            message_type=task_space_command_t,
-            global_config=global_config,
+            policy_name=model_cfg.policy_node_name,
+            observation_unpacking=observation_unpacking,
+            action_packing=action_packing,
+            stepper_frequency=model_cfg.stepper_frequency,
+            global_config=model_cfg.global_config,
         )
         CKPT_PATH = model_cfg.checkpoint
         ckpt = torch.load(CKPT_PATH, map_location=device)
         policy.load_state_dict(ckpt["model"])
+        self.stepper_frequency = model_cfg.stepper_frequency
 
         self.chunk_size = int(chunk_size)
         self.action_stride = int(action_stride)
@@ -100,34 +102,32 @@ class ActPolicyNode(PolicyNode):
         self.ensembler.cnt_buf[:] = 0.0
 
 
-    @staticmethod
-    def _build_joint_state(obs):
-        # cube(3) + target(3) + gripper(1) + franka_ee(3) = 10
-        cube = np.asarray(obs["cube"]).reshape(-1)
-        target = np.asarray(obs["target"]).reshape(-1)
-        gripper = np.asarray(obs["gripper"]).reshape(-1)
-        franka_ee = np.asarray(obs["franka_ee"][0]).reshape(-1)
-        vec = np.concatenate([cube, target, gripper, franka_ee], axis=0)
-        if vec.shape[0] != 10:
-            raise ValueError(f"Expected 10-D joints vector, got {vec.shape}")
-        return torch.tensor(vec, dtype=torch.float32)
+    def prepare_observation(self, ob: dict[str, Any]):
+        """Convert a single raw env observation into a batched policy input.
 
-    @staticmethod
-    def _extract_image(obs):
-        img = obs["images"]
-        if isinstance(img, dict):
-            cam_name = sorted(img.keys())[0]
-            img = img[cam_name]
-        elif isinstance(img, (list, tuple)):
-            img = img[0]
-        img = np.asarray(img)
-        if img.ndim == 2:
-            img = np.repeat(img[..., None], 3, axis=-1)
-        elif img.shape[-1] == 1:
-            img = np.repeat(img, 3, axis=-1)
-        elif img.shape[-1] > 3:
-            img = img[..., :3]
-        return img
+        Args:
+          ob: Single observation dict from the env. Expected to contain keys:
+            ``images`` (tuple with RGB as HxWxC),
+            ``cube``, ``target``, ``gripper``, and ``franka_ee``.
+          task_prompt: Natural language task description to include in the batch.
+
+        Returns:
+          A batch dictionary with:
+            - ``image``: ``torch.FloatTensor`` of shape ``[1, C, H, W]``.
+            - ``state``: ``torch.FloatTensor`` of shape ``[1, D]``.
+            - ``task``: ``list[str]`` of length 1.
+        """
+        # ---- Image ----
+        img = torch.from_numpy(ob["images"][0].copy()).permute(2, 0, 1)  # (C, H, W)
+        img = img.float().div(255.0).unsqueeze(0)  # (1, C, H, W)
+
+        # ---- State ----
+        state = torch.from_numpy(ob["state"]).float().unsqueeze(0)  # (1, D)
+
+        return {
+            "image": img,
+            "state": state,
+        }
 
     @torch.no_grad()
     def _predict_chunk(self, image_np, joints_t, K):
@@ -153,25 +153,20 @@ class ActPolicyNode(PolicyNode):
         """
         Returns: actions_to_exec (shape: (action_stride, action_dim))
         """
-        obs = {}
-        if "image" in obs_seq and obs_seq["image"] is not None:
-            obs["image"] = torch.tensor(obs_seq["image"], dtype=torch.float32)
-        if "state" in obs_seq and obs_seq["state"] is not None:
-            obs["state"] = torch.tensor(obs_seq["state"], dtype=torch.float32)
-        if "task" in obs_seq:
-            obs["task"] = obs_seq["task"]
 
-        joints = obs["state"]
-        image = obs["image"]
-
+        obs_seq = self.prepare_observation(obs_seq)
+        obs = {
+            "image": torch.tensor(obs_seq["image"], dtype=torch.float32),
+            "state": torch.tensor(obs_seq["state"], dtype=torch.float32),
+        }
         chunk_pred = self._predict_chunk(
-            image, joints, self.chunk_size
+            obs['image'], obs['state'], self.chunk_size
         )  # (K, action_dim)
 
         actions_to_exec = self.ensembler.step_and_get(
             new_chunk=chunk_pred, stride=self.action_stride
         )
-        return actions_to_exec[0]
+        return actions_to_exec[-1]
 
     def publish_action(self, action):
 

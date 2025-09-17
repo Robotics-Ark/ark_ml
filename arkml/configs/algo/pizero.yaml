@@ -13,6 +13,7 @@ model:
   enable_lora: false
   # Optional path to dataset stats JSON (see compute_stats.py)
   dataset_stats_path: null
+  task_prompt: null
 
 
 trainer:

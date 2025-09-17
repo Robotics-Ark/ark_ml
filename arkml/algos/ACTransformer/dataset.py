@@ -5,8 +5,7 @@ from typing import Any, Dict, List, Tuple, Optional
 
 import torch
 from torchvision import transforms as T
-
-from arkml.core.dataset import ArkDataset
+from torch.utils.data import Dataset
 
 tfm = T.Compose(
     [
@@ -38,7 +37,7 @@ def _to_action_tensor(action: Any) -> torch.Tensor:
     return a.reshape(8)
 
 
-class ActionChunkingArkDataset(ArkDataset):
+class ActionChunkingArkDataset(Dataset):
     """
     Trajectory dataset that yields fixed-length action chunks with masks.
 

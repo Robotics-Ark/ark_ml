@@ -1,14 +1,14 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0", "wheel"]          # bump to silence license warnings
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "arkml"
-version = "0.1.0"
-description = "ARK ML Robotics Framework"
+version = "1.0.0"
+description = "Machine learning backbone for the Ark Robotics Framework, providing core models, algorithms, and tools to enable intelligent perception, decision-making, and control in robotic applications."
 readme = "README.md"
-license = { text = "MIT" }
-requires-python = ">=3.8"
+license = "MIT"                                    # ← use SPDX string (not a table)
+requires-python = ">=3.10"
 dependencies = [
     "hydra-core",
     "torch",
@@ -17,4 +17,8 @@ dependencies = [
 
 [project.scripts]
 arkml-train = "arkml.tools.train:main"
+arkml-rollout = "arkml.tools.policy_service:main"
 
+[tool.setuptools.packages.find]
+include = ["arkml*"]                               # ← only package(s) to include
+exclude = ["outputs*", "tests*", "examples*"]      # ← exclude non-package dirs
