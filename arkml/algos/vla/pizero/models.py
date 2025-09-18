@@ -37,7 +37,8 @@ class PiZeroNet(BasePolicy):
         # LoRA config
         enable_lora: bool = False,
         lora_modules: list = None,
-        dataset_stats_path: str | None = None,
+        # Config
+        pred_horizon: int = 1,
     ):
         super().__init__()
         self.obs_dim = obs_dim
@@ -64,28 +65,14 @@ class PiZeroNet(BasePolicy):
 
         self._policy = policy_class.from_pretrained(model_path)
 
-        self._policy.config.input_features = {
-            "observation.images.image_top": PolicyFeature(
-                type=FeatureType.VISUAL, shape=self.image_dim
-            ),
-            "observation.images.image_wrist": PolicyFeature(
-                type=FeatureType.VISUAL, shape=self.image_dim
-            ),
-            "observation.state": PolicyFeature(
-                type=FeatureType.STATE, shape=(self.obs_dim,)
-            ),
-        }
-        self._policy.config.output_features = {
-            "action": PolicyFeature(type=FeatureType.ACTION, shape=(self.action_dim,)),
-        }
-
         if self.is_lora_enabled:
             raise NotImplementedError("Lora policies not implemented yet to VLA.")
         else:
             for p in self._policy.parameters():
                 p.requires_grad = True
 
-        self._policy.config.n_action_steps = 1
+        self._policy.config.n_action_steps = pred_horizon
+        self._load_input_output_features()
 
     def to_device(self, device: str) -> Any:
         """
@@ -287,3 +274,24 @@ class PiZeroNet(BasePolicy):
         self._policy.unnormalize_outputs = Unnormalize(
             self._policy.config.output_features, norm_map, loaded_stats
         )
+
+    def _load_input_output_features(self) -> None:
+        # TODO set proper input feature keys and output feature keys
+        if not self._policy.config.input_features:
+            self._policy.config.input_features = {
+                "observation.images.image_top": PolicyFeature(
+                    type=FeatureType.VISUAL, shape=self.image_dim
+                ),
+                # "observation.images.image_wrist": PolicyFeature(
+                #     type=FeatureType.VISUAL, shape=self.image_dim
+                # ),
+                "observation.state": PolicyFeature(
+                    type=FeatureType.STATE, shape=(self.obs_dim,)
+                ),
+            }
+        if not self._policy.config.output_features:
+            self._policy.config.output_features = {
+                "action": PolicyFeature(
+                    type=FeatureType.ACTION, shape=(self.action_dim,)
+                ),
+            }

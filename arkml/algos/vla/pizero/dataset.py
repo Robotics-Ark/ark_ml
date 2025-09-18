@@ -2,6 +2,7 @@ import os
 import pickle
 from typing import Any
 
+import numpy as np
 import torch
 from PIL import Image
 from torch.utils.data import Dataset
@@ -97,12 +98,22 @@ class PiZeroDataset(Dataset):
             traj_list = pickle.load(f)
             trajectory = traj_list[traj_idx]
 
-        image = Image.fromarray(trajectory["state"][10])
-        image = self.transform(image)
+        include_ee = False
+        if include_ee:
+            state = np.concatenate(
+                (
+                    trajectory["state"][6],
+                    trajectory["state"][7],
+                    trajectory["state"][8],
+                )
+            )
+        else:
+            state = np.array(trajectory["state"][6])
 
         obs = {
-            "image": image,
-            "state": torch.tensor(trajectory["state"][:10], dtype=torch.float),
+            "image_top": self.transform(Image.fromarray(trajectory["state"][9])),
+            # "image_wrist": self.transform(Image.fromarray(trajectory["state"][10])),
+            "state": torch.from_numpy(state).to(torch.float),  # with position + ee
             "action": torch.tensor(trajectory["action"], dtype=torch.float).unsqueeze(
                 0
             ),

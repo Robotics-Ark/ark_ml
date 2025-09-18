@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import importlib
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from collections.abc import Callable
 
 import numpy as np
 import yaml
-
 from arktypes.utils import unpack as _unpack, pack
 
 
@@ -227,4 +225,3 @@ def make_action_packer(schema: dict) -> Callable[..., dict[str, Any]]:
         )
 
     return _pack
-

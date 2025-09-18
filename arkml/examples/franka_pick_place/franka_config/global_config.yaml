@@ -20,7 +20,6 @@ robots:
 
 sensors:
   - "sensors/IntelRealSense.yaml"  # Path to robot configuration file
-  - "sensors/IntelRealSense_attached.yaml"
 
 
 channel_config:
@@ -33,4 +32,3 @@ channel_config:
     franka/joint_states/sim: joint_state_t
     franka/ee_state/sim: pose_t
     IntelRealSense/rgbd/sim: rgbd_t
-    IntelRealSense_attached/rgbd/sim: rgbd_t

@@ -11,6 +11,8 @@ from arkml.utils.schema_io import (
     make_action_packer,
 )
 
+from lerobot.src.lerobot.configs.types import FeatureType
+
 
 class PiZeroPolicyNode(PolicyNode):
     """Wrapper node for PiZero
@@ -43,6 +45,9 @@ class PiZeroPolicyNode(PolicyNode):
         obs_unpacker = make_observation_unpacker(schema)
         act_packer = make_action_packer(schema)
 
+        input_features = dict(image_top=FeatureType.VISUAL, state=FeatureType.STATE)
+        output_features = dict(action=FeatureType.ACTION)
+
         super().__init__(
             policy=policy,
             device=device,
@@ -52,23 +57,6 @@ class PiZeroPolicyNode(PolicyNode):
             stepper_frequency=cfg.stepper_frequency,
             global_config=cfg.global_config,
         )
-
-        # if getattr(cfg, "channel_config", None):
-        #     schema = load_schema(cfg.channel_config.observation)
-        #     obs_only = getattr(cfg, "obs_only", None)
-        #     obs_unpacker = make_observation_unpacker(schema)
-        #     act_packer = make_action_packer(schema)
-        #
-        #     # Bind optional filter via partial by wrapping in a small closure
-        #     def _obs_unpack_wrapper(obs_dict, obs_keys=None, only=obs_only):
-        #         return obs_unpacker(obs_dict, obs_keys=obs_keys, only=only)
-        #
-        #     observation_unpack_fn = _obs_unpack_wrapper
-        #     action_pack_fn = act_packer
-        # else:
-        #     # Fall back to existing Franka-specific helpers
-        #     observation_unpack_fn = franka_observation_unpacking
-        #     action_pack_fn = franka_action_packing
 
         self.policy.to_device(device)
         self.policy.reset()

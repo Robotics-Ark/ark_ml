@@ -8,18 +8,13 @@ observation:
           select: position
 #          index: -2
         # End-effector position
-        - from: franka/ee_state/sim
-          using: pose
-          select: position
+#        - from: franka/ee_state/sim
+#          using: pose
+#          select: position
 
     # Return images as a list for downstream policy that expects a batch-like list
     image_top:
       from: IntelRealSense/rgbd/sim
-      using: rgbd
-      select: rgb
-      wrap: true
-    image_wrist:
-      from: IntelRealSense_attached/rgbd/sim
       using: rgbd
       select: rgb
       wrap: true

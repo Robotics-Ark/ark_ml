@@ -11,8 +11,6 @@ model:
   action_horizon: 1
   image_dim: (3, 480, 640) # Image dimension (b,c,h,w)
   enable_lora: false
-  # Optional path to dataset stats JSON (see compute_stats.py)
-  dataset_stats_path: null
   task_prompt: null
 
 
