@@ -103,8 +103,8 @@ def compute_pizero_stats(
 
     # Infer shapes from the first trajectory
     first = trajs[0]
-    state_block = np.asarray(first["state"][:10], dtype=np.float64)  # (10, state_dim)
-    img_arr = np.asarray(first["state"][10])  # (H,W,C), uint8 assumed
+    state_block = np.asarray(first["state"][6], dtype=np.float64)  # (10, state_dim)
+    img_arr = np.asarray(first["state"][9])  # (H,W,C), uint8 assumed
     if img_arr.ndim != 3 or img_arr.shape[-1] != 3:
         raise ValueError(
             "Expected RGB image at trajectory['state'][10] with shape (H,W,3)"
@@ -122,7 +122,8 @@ def compute_pizero_stats(
     s_state = _init_state((state_dim,), dtype=np.float64)
     s_action = _init_state((action_dim,), dtype=np.float64)
     # For images we accumulate per-channel moments; spatial dims are averaged implicitly by flattening
-    s_image = _init_state((3,), dtype=np.float64)
+    top_image = _init_state((3,), dtype=np.float64)
+    wrist_image = _init_state((3,), dtype=np.float64)
 
     # Decide image sampling indices to keep it light
     num_trajs = len(trajs)
@@ -130,7 +131,7 @@ def compute_pizero_stats(
 
     for i, traj in enumerate(trajs):
         # state: flatten time into batch
-        sb = np.asarray(traj["state"][:10], dtype=np.float64)  # (10, state_dim)
+        sb = np.asarray(traj["state"][6], dtype=np.float64)  # (10, state_dim)
         _accumulate_moments(sb, s_state)
 
         # action
@@ -141,6 +142,24 @@ def compute_pizero_stats(
         _accumulate_moments(act[None, ...], s_action)
 
         # image (sampled)
+        if (not sample_images_only) or (i in img_indices):
+            img = np.asarray(traj["state"][9])  # (H,W,C), uint8
+            if img.dtype != np.float32 and img.dtype != np.float64:
+                img = img.astype(np.float32)
+            img = img / 255.0  # to [0,1]
+            # channel-wise mean/std computed over all pixels
+            c_means = img.reshape(-1, 3).mean(axis=0)  # (3,)
+            c_sumsq = (img.reshape(-1, 3) ** 2).mean(axis=0)  # (3,), will rescale below
+            # Convert means over pixels to sum/sumsq with a pseudo-count = num_pixels
+            num_pixels = img.shape[0] * img.shape[1]
+            # Build a temporary batch of size 1 with channel vector repeated to fit accumulator API
+            # We can accumulate directly by updating state fields
+            top_image["count"] += num_pixels
+            top_image["sum"] += c_means * num_pixels
+            top_image["sumsq"] += c_sumsq * num_pixels
+            top_image["min"] = np.minimum(top_image["min"], img.reshape(-1, 3).min(axis=0))
+            top_image["max"] = np.maximum(top_image["max"], img.reshape(-1, 3).max(axis=0))
+
         if (not sample_images_only) or (i in img_indices):
             img = np.asarray(traj["state"][10])  # (H,W,C), uint8
             if img.dtype != np.float32 and img.dtype != np.float64:
@@ -153,24 +172,29 @@ def compute_pizero_stats(
             num_pixels = img.shape[0] * img.shape[1]
             # Build a temporary batch of size 1 with channel vector repeated to fit accumulator API
             # We can accumulate directly by updating state fields
-            s_image["count"] += num_pixels
-            s_image["sum"] += c_means * num_pixels
-            s_image["sumsq"] += c_sumsq * num_pixels
-            s_image["min"] = np.minimum(s_image["min"], img.reshape(-1, 3).min(axis=0))
-            s_image["max"] = np.maximum(s_image["max"], img.reshape(-1, 3).max(axis=0))
+            wrist_image["count"] += num_pixels
+            wrist_image["sum"] += c_means * num_pixels
+            wrist_image["sumsq"] += c_sumsq * num_pixels
+            wrist_image["min"] = np.minimum(wrist_image["min"], img.reshape(-1, 3).min(axis=0))
+            wrist_image["max"] = np.maximum(wrist_image["max"], img.reshape(-1, 3).max(axis=0))
 
     # Finalize stats
     state_stats = _finalize_stats(s_state)
     action_stats = _finalize_stats(s_action)
-    image_stats = _finalize_stats(s_image)
+    top_image_stats = _finalize_stats(top_image)
+    wrist_image_stats = _finalize_stats(wrist_image)
 
     # Match LeRobot shapes: visuals (C,1,1)
     for k in ("mean", "std", "min", "max"):
-        image_stats[k] = image_stats[k].reshape(3, 1, 1)
+        top_image_stats[k] = top_image_stats[k].reshape(3, 1, 1)
+
+    for k in ("mean", "std", "min", "max"):
+        wrist_image_stats[k] = wrist_image_stats[k].reshape(3, 1, 1)
 
     return {
         "observation.state": state_stats,
-        "observation.images.image": image_stats,
+        "observation.images.image_top": top_image_stats,
+        "observation.images.image_wrist": wrist_image_stats,
         "action": action_stats,
     }
 

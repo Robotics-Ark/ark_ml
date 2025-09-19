@@ -1,22 +1,18 @@
-import importlib
 import json
 import threading
-import time
 from abc import abstractmethod, ABC
 from collections.abc import Callable
 from functools import partial
-from pathlib import Path
 from typing import Any
 
 import numpy as np
-import yaml
 from ark.client.comm_infrastructure.base_node import BaseNode
 from ark.env.spaces import ActionSpace, ObservationSpace
 from ark.tools.log import log
+from arkml.utils.schema_io import load_schema
+from arkml.utils.utils import resolve_channel_types
 from arktypes import flag_t, string_t
 from torch import nn
-
-from arkml.utils.schema_io import load_schema
 
 
 class PolicyNode(ABC, BaseNode):
@@ -38,7 +34,6 @@ class PolicyNode(ABC, BaseNode):
         device: str,
         observation_unpacking: Callable,
         action_packing: Callable,
-        stepper_frequency: int,
         global_config=None,
     ):
         super().__init__(policy_name, global_config)
@@ -59,9 +54,9 @@ class PolicyNode(ABC, BaseNode):
         self.observation_unpacking = partial(observation_unpacking, obs_keys=obs_keys)
         self.action_packing = partial(action_packing, action_keys=action_keys)
 
-        obs_channels = self._resolve_channel_types(observation_channels)
+        obs_channels = resolve_channel_types(observation_channels)
 
-        act_channels = self._resolve_channel_types(action_channels)
+        act_channels = resolve_channel_types(action_channels)
 
         if not obs_channels:
             raise NotImplementedError("No observation channels found")
@@ -89,18 +84,8 @@ class PolicyNode(ABC, BaseNode):
         self._stop_event = threading.Event()
         self._publish_lock = threading.Lock()
 
-        # self.worker_thread = threading.Thread(
-        #     target=self._inference_worker, daemon=True
-        # )
-        # self.worker_thread.start()
-
-        # Stepper publishes actions at fixed control frequency
-        # self.create_stepper(stepper_frequency, self.step) #
-
-        # Create services - start, stop and reset policy state
+        # Create services - predict and reset policy state
         self._predict_service_name = f"{self.name}/policy/predict"
-        # self._start_service_name = f"{self.name}/policy/start"
-        # self._stop_service_name = f"{self.name}/policy/stop"
         self._reset_service_name = f"{self.name}/policy/reset"
 
         # predict
@@ -112,20 +97,6 @@ class PolicyNode(ABC, BaseNode):
         self.create_service(
             self._reset_service_name, flag_t, flag_t, self._callback_reset_service
         )
-
-    def _inference_worker(self):
-        """Background thread to run model inference asynchronously."""
-        while not self._stop_event.is_set():
-            self.latest_action = None
-            if self._stop_service:
-                time.sleep(0.05)
-                continue
-            self.observation_space.wait_until_observation_space_is_ready()
-            obs = self.observation_space.get_observation()
-            if obs is not None:
-                action = self.predict(obs)
-                log.info(f"[ACTION PREDICTED] : {action}")
-                self.latest_action = action
 
     def reset(self) -> None:
         """Reset the internal state of the policy."""
@@ -199,21 +170,3 @@ class PolicyNode(ABC, BaseNode):
     def predict(self, obs_seq: dict[str, Any]) -> np.ndarray:
         """Compute the action(s) from observations."""
         ...
-
-    @staticmethod
-    def _resolve_channel_types(mapping: dict[str, Any]) -> dict[str, type]:
-        """Resolve type names from config into arktypes classes.
-
-        Accepts either already-imported classes or string names present in the
-        ``arktypes`` package. Returns a mapping of channel name to type.
-        """
-        if not mapping:
-            return {}
-        resolved: dict[str, type] = {}
-        arktypes_mod = importlib.import_module("arktypes")
-        for ch_name, t in mapping.items():
-            if isinstance(t, str):
-                resolved[ch_name] = getattr(arktypes_mod, t)
-            else:
-                resolved[ch_name] = t
-        return resolved
