@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PIL import Image
+
+from .config_utils import resolve_visual_feature_names
 
 
 def estimate_num_samples(
@@ -15,7 +16,6 @@ def estimate_num_samples(
     max_num_samples: int = 10_000,
     power: float = 0.75,
 ) -> int:
-    """Heuristic from LeRobot to estimate sample count based on dataset size."""
     if dataset_len < min_num_samples:
         min_num_samples = dataset_len
     return max(min_num_samples, min(int(dataset_len**power), max_num_samples))
@@ -29,10 +29,6 @@ def sample_indices(data_len: int) -> list[int]:
 
 
 def _accumulate_moments(x: np.ndarray, state: dict[str, Any]) -> None:
-    """Accumulate count, sum, sumsq, min, max across the first axis of x.
-
-    x is expected to be shape (N, D...) where axis=0 is the sample axis.
-    """
     x = np.asarray(x)
     n = x.shape[0]
     state["count"] += n
@@ -82,148 +78,97 @@ def _iter_trajectories(dataset_path: str):
 
 
 def compute_pizero_stats(
-    dataset_path: str, sample_images_only: bool = True
+    dataset_path: str,
+    *,
+    visual_input_features=None,
+    obs_dim: int = 9,
+    action_dim: int = 8,
+    image_channels: int = 3,
+    sample_images_only: bool = True,
+    image_base_index: int = 9,
 ) -> dict[str, dict[str, Any]]:
-    """Compute dataset statistics for PiZero datasets.
+    camera_names = resolve_visual_feature_names(visual_input_features)
 
-    Assumptions based on current PiZeroDataset:
-    - `trajectory["state"][:10]` are numeric states -> shape (T=10, state_dim)
-    - `trajectory["state"][10]` is an RGB image array (H, W, C), uint8
-    - `trajectory["action"]` is a 1D or 2D array -> coerced to (action_dim,)
-
-    Returns a dict keyed by LeRobot policy feature names:
-      - "observation.state": mean/std/min/max with shape (state_dim,)
-      - "observation.images.image": mean/std/min/max with shape (3,1,1) in [0,1]
-      - "action": mean/std/min/max with shape (action_dim,)
-    """
-    # First, collect quick shapes to initialize accumulators and dataset length
-    trajs = list(_iter_trajectories(dataset_path))
-    if len(trajs) == 0:
+    trajectories = list(_iter_trajectories(dataset_path))
+    if not trajectories:
         raise FileNotFoundError(f"No trajectories found in {dataset_path}")
 
-    # Infer shapes from the first trajectory
-    first = trajs[0]
-    state_block = np.asarray(first["state"][6], dtype=np.float64)  # (10, state_dim)
-    img_arr = np.asarray(first["state"][9])  # (H,W,C), uint8 assumed
-    if img_arr.ndim != 3 or img_arr.shape[-1] != 3:
-        raise ValueError(
-            "Expected RGB image at trajectory['state'][10] with shape (H,W,3)"
-        )
-    action_arr = np.asarray(first["action"])  # (action_dim,) or (1, action_dim)
-    if action_arr.ndim == 2 and action_arr.shape[0] == 1:
-        action_arr = action_arr[0]
-    if action_arr.ndim != 1:
-        raise ValueError("Expected action to be 1D or (1, D)")
+    accumulators: dict[str, dict[str, Any]] = {}
+    accumulators["observation.state"] = _init_state((obs_dim,), dtype=np.float64)
+    accumulators["action"] = _init_state((action_dim,), dtype=np.float64)
+    for cam_name in camera_names:
+        key = f"observation.images.{cam_name}"
+        accumulators[key] = _init_state((image_channels,), dtype=np.float64)
 
-    state_dim = state_block.shape[-1]
-    action_dim = action_arr.shape[-1]
+    sample_idxs = (
+        set(sample_indices(len(trajectories))) if sample_images_only else set(range(len(trajectories)))
+    )
 
-    # Accumulators
-    s_state = _init_state((state_dim,), dtype=np.float64)
-    s_action = _init_state((action_dim,), dtype=np.float64)
-    # For images we accumulate per-channel moments; spatial dims are averaged implicitly by flattening
-    top_image = _init_state((3,), dtype=np.float64)
-    wrist_image = _init_state((3,), dtype=np.float64)
+    for idx, traj in enumerate(trajectories):
+        state_block = np.asarray(traj["state"][6], dtype=np.float64)
+        _accumulate_moments(state_block.reshape(1, -1), accumulators["observation.state"])
 
-    # Decide image sampling indices to keep it light
-    num_trajs = len(trajs)
-    img_indices = set(sample_indices(num_trajs))
+        action = np.asarray(traj["action"], dtype=np.float64)
+        if action.ndim == 1:
+            action = action.reshape(1, -1)
+        _accumulate_moments(action, accumulators["action"])
 
-    for i, traj in enumerate(trajs):
-        # state: flatten time into batch
-        sb = np.asarray(traj["state"][6], dtype=np.float64)  # (10, state_dim)
-        _accumulate_moments(sb, s_state)
+        if sample_images_only and idx not in sample_idxs:
+            continue
 
-        # action
-        act = np.asarray(traj["action"])  # (D,) or (1,D)
-        if act.ndim == 2 and act.shape[0] == 1:
-            act = act[0]
-        act = act.astype(np.float64)
-        _accumulate_moments(act[None, ...], s_action)
+        for cam_idx, cam_name in enumerate(camera_names):
+            image_value = traj.get(cam_name)
+            if image_value is None:
+                state_values = traj.get("state")
+                if state_values is not None:
+                    image_index = image_base_index + cam_idx
+                    if len(state_values) > image_index:
+                        image_value = state_values[image_index]
+            if image_value is None:
+                raise KeyError(f"Image data for '{cam_name}' not found in trajectory")
 
-        # image (sampled)
-        if (not sample_images_only) or (i in img_indices):
-            img = np.asarray(traj["state"][9])  # (H,W,C), uint8
-            if img.dtype != np.float32 and img.dtype != np.float64:
-                img = img.astype(np.float32)
-            img = img / 255.0  # to [0,1]
-            # channel-wise mean/std computed over all pixels
-            c_means = img.reshape(-1, 3).mean(axis=0)  # (3,)
-            c_sumsq = (img.reshape(-1, 3) ** 2).mean(axis=0)  # (3,), will rescale below
-            # Convert means over pixels to sum/sumsq with a pseudo-count = num_pixels
-            num_pixels = img.shape[0] * img.shape[1]
-            # Build a temporary batch of size 1 with channel vector repeated to fit accumulator API
-            # We can accumulate directly by updating state fields
-            top_image["count"] += num_pixels
-            top_image["sum"] += c_means * num_pixels
-            top_image["sumsq"] += c_sumsq * num_pixels
-            top_image["min"] = np.minimum(top_image["min"], img.reshape(-1, 3).min(axis=0))
-            top_image["max"] = np.maximum(top_image["max"], img.reshape(-1, 3).max(axis=0))
+            img = np.asarray(image_value, dtype=np.float64)
+            if img.max() > 1.0:
+                img = img / 255.0
+            channels = img.reshape(-1, image_channels)
+            accum_key = f"observation.images.{cam_name}"
+            _accumulate_moments(channels, accumulators[accum_key])
 
-        if (not sample_images_only) or (i in img_indices):
-            img = np.asarray(traj["state"][10])  # (H,W,C), uint8
-            if img.dtype != np.float32 and img.dtype != np.float64:
-                img = img.astype(np.float32)
-            img = img / 255.0  # to [0,1]
-            # channel-wise mean/std computed over all pixels
-            c_means = img.reshape(-1, 3).mean(axis=0)  # (3,)
-            c_sumsq = (img.reshape(-1, 3) ** 2).mean(axis=0)  # (3,), will rescale below
-            # Convert means over pixels to sum/sumsq with a pseudo-count = num_pixels
-            num_pixels = img.shape[0] * img.shape[1]
-            # Build a temporary batch of size 1 with channel vector repeated to fit accumulator API
-            # We can accumulate directly by updating state fields
-            wrist_image["count"] += num_pixels
-            wrist_image["sum"] += c_means * num_pixels
-            wrist_image["sumsq"] += c_sumsq * num_pixels
-            wrist_image["min"] = np.minimum(wrist_image["min"], img.reshape(-1, 3).min(axis=0))
-            wrist_image["max"] = np.maximum(wrist_image["max"], img.reshape(-1, 3).max(axis=0))
+    stats = {key: _finalize_stats(acc) for key, acc in accumulators.items()}
 
-    # Finalize stats
-    state_stats = _finalize_stats(s_state)
-    action_stats = _finalize_stats(s_action)
-    top_image_stats = _finalize_stats(top_image)
-    wrist_image_stats = _finalize_stats(wrist_image)
+    for cam_name in camera_names:
+        key = f"observation.images.{cam_name}"
+        for stat_key in ("mean", "std", "min", "max"):
+            stats[key][stat_key] = stats[key][stat_key].reshape(image_channels, 1, 1)
 
-    # Match LeRobot shapes: visuals (C,1,1)
-    for k in ("mean", "std", "min", "max"):
-        top_image_stats[k] = top_image_stats[k].reshape(3, 1, 1)
-
-    for k in ("mean", "std", "min", "max"):
-        wrist_image_stats[k] = wrist_image_stats[k].reshape(3, 1, 1)
-
-    return {
-        "observation.state": state_stats,
-        "observation.images.image_top": top_image_stats,
-        "observation.images.image_wrist": wrist_image_stats,
-        "action": action_stats,
-    }
+    return stats
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Compute PiZero dataset stats (LeRobot-compatible)"
+        description="Compute PiZero dataset stats (configurable cameras)"
     )
-    parser.add_argument(
-        "--dataset_path",
-        type=str,
-        required=True,
-        help="Directory with .pkl trajectory files",
-    )
-    parser.add_argument(
-        "--out", type=str, required=True, help="Output JSON path for stats"
-    )
+    parser.add_argument("--dataset_path", type=str, required=True)
+    parser.add_argument("--out", type=str, required=True)
     parser.add_argument(
         "--full_images",
         action="store_true",
-        help="Process images for every trajectory instead of sampling (slower)",
+        help="Process every trajectory image instead of sampling",
+    )
+    parser.add_argument(
+        "--visual_input_features",
+        type=str,
+        default=None,
+        help="Camera list (JSON string) or path to YAML fragment",
     )
     args = parser.parse_args()
 
     stats = compute_pizero_stats(
-        args.dataset_path, sample_images_only=not args.full_images
+        args.dataset_path,
+        visual_input_features=args.visual_input_features,
+        sample_images_only=not args.full_images,
     )
 
-    # Convert numpy arrays to lists for JSON
     serializable = {
         k: {kk: vv.tolist() for kk, vv in d.items()} for k, d in stats.items()
     }

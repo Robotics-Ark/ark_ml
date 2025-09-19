@@ -14,6 +14,8 @@ from lerobot.policies.pi0.modeling_pi0 import PI0Policy
 from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 from torch import tensor
 
+from .config_utils import resolve_visual_feature_names
+
 
 @MODELS.register("PiZeroNet")
 class PiZeroNet(BasePolicy):
@@ -39,13 +41,17 @@ class PiZeroNet(BasePolicy):
         lora_modules: list = None,
         # Config
         pred_horizon: int = 1,
+        visual_input_features=None,
     ):
         super().__init__()
         self.obs_dim = obs_dim
         self.action_dim = action_dim
-        self.image_dim = image_dim
+        self.image_dim = tuple(image_dim)
         self._peft_module = None
         self.device = None
+        self.visual_input_features = resolve_visual_feature_names(
+            visual_input_features
+        )
 
         self._peft_attached = False
 
@@ -129,14 +135,13 @@ class PiZeroNet(BasePolicy):
         obs = {}
         for k, v in observation.items():
             if k == "state":
-                obs["observation.state"] = observation[k].to(self.device)
+                obs["observation.state"] = v.to(self.device)
             elif k == "task":
-                obs["task"] = observation[k]
-            elif k == "action" or k == "action_is_pad":
-                obs[k] = observation[k].to(self.device)
-            elif "image" in k:
-                obs[f"observation.images.{k}"] = observation[k].to(self.device)
-
+                obs["task"] = v
+            elif k in {"action", "action_is_pad"}:
+                obs[k] = v.to(self.device)
+            elif k in self.visual_input_features:
+                obs[f"observation.images.{k}"] = v.to(self.device)
         return obs
 
     def predict(self, obs: dict[str, Any], **kwargs) -> tensor:
@@ -276,22 +281,19 @@ class PiZeroNet(BasePolicy):
         )
 
     def _load_input_output_features(self) -> None:
-        # TODO set proper input feature keys and output feature keys
-        if not self._policy.config.input_features:
-            self._policy.config.input_features = {
-                "observation.images.image_top": PolicyFeature(
-                    type=FeatureType.VISUAL, shape=self.image_dim
-                ),
-                # "observation.images.image_wrist": PolicyFeature(
-                #     type=FeatureType.VISUAL, shape=self.image_dim
-                # ),
-                "observation.state": PolicyFeature(
-                    type=FeatureType.STATE, shape=(self.obs_dim,)
-                ),
-            }
-        if not self._policy.config.output_features:
-            self._policy.config.output_features = {
-                "action": PolicyFeature(
-                    type=FeatureType.ACTION, shape=(self.action_dim,)
-                ),
-            }
+        input_features = {
+            "observation.state": PolicyFeature(
+                type=FeatureType.STATE, shape=(self.obs_dim,)
+            )
+        }
+        for cam_name in self.visual_input_features:
+            input_features[f"observation.images.{cam_name}"] = PolicyFeature(
+                type=FeatureType.VISUAL, shape=self.image_dim
+            )
+        self._policy.config.input_features = input_features
+
+        self._policy.config.output_features = {
+            "action": PolicyFeature(
+                type=FeatureType.ACTION, shape=(self.action_dim,)
+            )
+        }

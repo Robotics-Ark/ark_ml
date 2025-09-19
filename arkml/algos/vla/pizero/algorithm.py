@@ -46,14 +46,22 @@ class PiZeroAlgorithm(BaseAlgorithm):
                 ),
             ]
         )
+        visual_features_cfg = getattr(cfg.algo.model, "visual_input_features", None)
+
         dataset = PiZeroDataset(
             dataset_path=cfg.data.dataset_path,
             transform=transform,
             task_prompt=cfg.task_prompt,
             pred_horizon=cfg.algo.model.pred_horizon,
+            visual_input_features=visual_features_cfg,
         )
-
-        self.calculate_dataset_stats(dataset_path=cfg.data.dataset_path)
+        self.calculate_dataset_stats(
+            dataset_path=cfg.data.dataset_path,
+            visual_input_features=visual_features_cfg,
+            obs_dim=cfg.algo.model.obs_dim,
+            action_dim=cfg.algo.model.action_dim,
+            image_dim=tuple(cfg.algo.model.image_dim),
+        )
 
         # Train/val split (80/20)
         total_len = len(dataset)
@@ -124,7 +132,15 @@ class PiZeroAlgorithm(BaseAlgorithm):
         )
         return evaluator.evaluate()
 
-    def calculate_dataset_stats(self, dataset_path) -> None:
+    def calculate_dataset_stats(
+        self,
+        dataset_path,
+        *,
+        visual_input_features=None,
+        obs_dim: int,
+        action_dim: int,
+        image_dim: tuple[int, int, int],
+    ) -> None:
         """
         Calculate the dataset statistics.
         Args:
@@ -133,7 +149,14 @@ class PiZeroAlgorithm(BaseAlgorithm):
         try:
             stats_path = Path(dataset_path) / "pizero_stats.json"
             print(f"[PiZeroAlgorithm] Computing dataset stats → {stats_path}")
-            stats = compute_pizero_stats(dataset_path, sample_images_only=True)
+            stats = compute_pizero_stats(
+                dataset_path,
+                visual_input_features=visual_input_features,
+                obs_dim=obs_dim,
+                action_dim=action_dim,
+                image_channels=image_dim[0],
+                sample_images_only=True,
+            )
             stats_path.parent.mkdir(parents=True, exist_ok=True)
 
             with open(stats_path, "w") as f:

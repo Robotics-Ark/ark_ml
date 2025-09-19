@@ -4,49 +4,37 @@ from typing import Any
 import numpy as np
 import torch
 from arkml.algos.vla.pizero.models import PiZeroNet
+from arkml.algos.vla.pizero.config_utils import resolve_visual_feature_names
 from arkml.core.policy_node import PolicyNode
 from arkml.utils.schema_io import (
     load_schema,
-    make_observation_unpacker,
     make_action_packer,
+    make_observation_unpacker,
 )
-
-from lerobot.src.lerobot.configs.types import FeatureType
 
 
 class PiZeroPolicyNode(PolicyNode):
-    """Wrapper node for PiZero
+    """Wrapper node for PiZero"""
 
-    Args:
-      model_cfg: Model configurations.
-      device: Target device string (e.g., ``"cuda"`` or ``"cpu"``).
-    """
-
-    def __init__(
-        self,
-        cfg,
-        device: str,
-    ):
+    def __init__(self, cfg, device: str):
         model_cfg = cfg.algo.model
+        self.visual_input_features = resolve_visual_feature_names(
+            getattr(model_cfg, "visual_input_features", None)
+        )
+
         policy = PiZeroNet(
             policy_type=model_cfg.policy_type,
             model_path=model_cfg.model_path,
             obs_dim=model_cfg.obs_dim,
             action_dim=model_cfg.action_dim,
-            image_dim=model_cfg.image_dim,
+            image_dim=tuple(model_cfg.image_dim),
+            visual_input_features=self.visual_input_features,
         )
-        # Choose pack/unpack strategy: schema-based (robot-agnostic) or model-specific defaults
-        if getattr(cfg, "io_schema", None):
-            io_schema_path = cfg.io_schema
-        else:
-            io_schema_path = "default_io_schema.yaml"
 
+        io_schema_path = getattr(cfg, "io_schema", "default_io_schema.yaml")
         schema = load_schema(io_schema_path)
         obs_unpacker = make_observation_unpacker(schema)
         act_packer = make_action_packer(schema)
-
-        input_features = dict(image_top=FeatureType.VISUAL, state=FeatureType.STATE)
-        output_features = dict(action=FeatureType.ACTION)
 
         super().__init__(
             policy=policy,
@@ -62,14 +50,12 @@ class PiZeroPolicyNode(PolicyNode):
         self.policy.reset()
         self.policy.set_eval_mode()
         self.create_stepper(10, self.step)
-        self.task_prompt = model_cfg.task_prompt
+        self.task_prompt = model_cfg.task_prompt or ""
 
-        # Inference chunking: number of actions to prefetch from the model when queue is empty
         self.n_infer_actions = getattr(model_cfg, "pred_horizon", 10)
         self._action_queue: deque[np.ndarray] = deque()
 
     def _on_reset(self):
-        """Clear any prefetched actions when an episode ends."""
         self._action_queue.clear()
 
     def prepare_observation(self, ob: dict[str, Any], task_prompt: str):
@@ -87,19 +73,41 @@ class PiZeroPolicyNode(PolicyNode):
             - ``state``: ``torch.FloatTensor`` of shape ``[1, D]``.
             - ``task``: ``list[str]`` of length 1.
         """
+        obs: dict[str, Any] = {"task": [task_prompt]}
 
-        obs = {}
-        for k, v in ob.items():
-            if k == "state":
-                state = torch.from_numpy(ob["state"]).float().unsqueeze(0)  # (1, D)
-                obs["state"] = torch.tensor(state, dtype=torch.float32)
-            elif "image" in k:
-                img = torch.from_numpy(ob[k][0].copy()).permute(2, 0, 1)  # (C, H, W)
-                img = img.float().div(255.0).unsqueeze(0)  # (1, C, H, W)
-                obs[k] = torch.tensor(img.clone(), dtype=torch.float32)
+        state_value = ob.get("state")
+        if state_value is not None:
+            obs["state"] = self._to_tensor(state_value, add_batch=True)
 
-        obs["task"] = [task_prompt]
+        for cam_name in self.visual_input_features:
+            value = ob.get(cam_name)
+            if value is None:
+                continue
+            obs[cam_name] = self._to_tensor(value, is_image=True)
+
         return obs
+
+    @staticmethod
+    def _to_tensor(value: Any, *, is_image: bool = False, add_batch: bool = False) -> torch.Tensor:
+        if isinstance(value, torch.Tensor):
+            tensor = value.clone().detach().float()
+        else:
+            array = np.asarray(value)
+            tensor = torch.from_numpy(array).float()
+
+        if is_image:
+            if tensor.dim() == 3:
+                if tensor.shape[0] not in {1, 3} and tensor.shape[-1] in {1, 3}:
+                    tensor = tensor.permute(2, 0, 1)
+                tensor = tensor.unsqueeze(0)
+            elif tensor.dim() == 4:
+                if tensor.shape[1] not in {1, 3} and tensor.shape[-1] in {1, 3}:
+                    tensor = tensor.permute(0, 3, 1, 2)
+            return tensor
+
+        if add_batch and tensor.dim() == 1:
+            tensor = tensor.unsqueeze(0)
+        return tensor.float()
 
     def predict(self, obs_seq):
         """Compute the action for the given observation batch.
@@ -115,18 +123,15 @@ class PiZeroPolicyNode(PolicyNode):
         Returns:
           numpy.ndarray: Action vector for the first batch element.
         """
-
-        # Convert to tensors in the expected shapes
         obs = self.prepare_observation(obs_seq, self.task_prompt)
 
-        # Serve one action per call. If queue is empty, prefetch n actions.
         if len(self._action_queue) == 0:
             with torch.no_grad():
                 actions = self.policy.predict_n_actions(
                     obs, n_actions=self.n_infer_actions
                 )
-            actions = actions.detach().cpu().numpy()  # (n, action_dim)
-            for i in range(actions.shape[0]):
-                self._action_queue.append(actions[i])
+            actions = actions.detach().cpu().numpy()
+            for action in actions:
+                self._action_queue.append(action)
 
         return self._action_queue.popleft()

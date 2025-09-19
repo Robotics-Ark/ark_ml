@@ -12,7 +12,8 @@ model:
   image_dim: (3, 480, 640) # Image dimension (b,c,h,w)
   enable_lora: false
   task_prompt: null
-
+  visual_input_features:
+    - image_top
 
 trainer:
   lr: 2e-4
@@ -36,4 +37,3 @@ lora:
   lora_r: 16
   lora_alpha: 32
   lora_dropout: 0.05
-
