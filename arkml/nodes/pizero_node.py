@@ -30,15 +30,10 @@ class PiZeroPolicyNode(PolicyNode):
             visual_input_features=self.visual_input_features,
         )
 
-        io_schema_path = getattr(cfg, "io_schema", "default_io_schema.yaml")
-        schema = load_schema(io_schema_path)
-        obs_unpacker = make_observation_unpacker(schema)
-
         super().__init__(
             policy=policy,
             device=device,
-            policy_name=cfg.policy_node_name,
-            observation_unpacking=obs_unpacker,
+            policy_name=cfg.node_name,
             global_config=cfg.global_config,
         )
 
@@ -93,7 +88,11 @@ class PiZeroPolicyNode(PolicyNode):
             if isinstance(value, torch.Tensor):
                 img_t = value
                 # If HWC, convert to CHW
-                if img_t.dim() == 3 and img_t.shape[0] in (1, 3) and img_t.shape[-1] in (1, 3):
+                if (
+                    img_t.dim() == 3
+                    and img_t.shape[0] in (1, 3)
+                    and img_t.shape[-1] in (1, 3)
+                ):
                     # Ambiguous; prefer assuming HWC if last dim is channels
                     if img_t.shape[-1] in (1, 3):
                         img_t = img_t.permute(2, 0, 1)

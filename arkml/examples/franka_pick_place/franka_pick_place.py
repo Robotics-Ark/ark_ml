@@ -74,26 +74,13 @@ class RobotNode(ArkEnv):
         """
         cube_state = observation_dict["cube/ground_truth/sim"]
         target_state = observation_dict["target/ground_truth/sim"]
-        joint_state = observation_dict["franka/joint_states/sim"]
-        ee_state = observation_dict["franka/ee_state/sim"]
-        images = observation_dict["IntelRealSense/rgbd/sim"]
 
         _, cube_position, _, _, _ = unpack.rigid_body_state(cube_state)
         _, target_position, _, _, _ = unpack.rigid_body_state(target_state)
-        _, _, franka_joint_position, _, _ = unpack.joint_state(joint_state)
-        franka_ee_position, franka_ee_orientation = unpack.pose(ee_state)
-        rgb, depth = unpack.rgbd(images)
-
-        gripper_position = franka_joint_position[
-            -2
-        ]  # Assuming last two joints are gripper
 
         return {
             "cube": cube_position,
             "target": target_position,
-            "position": [franka_joint_position],
-            "franka_ee": (franka_ee_position, franka_ee_orientation),
-            "images": (rgb, depth),
         }
 
     def terminated_truncated_info(self, state, action, next_state):
@@ -171,7 +158,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--n_episodes",
         type=int,
-        default=3,
+        default=1,
         help="Number of episodes to run (default: 3)",
     )
     parser.add_argument(
@@ -185,6 +172,12 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="Policy",
         help="Policy node name",
+    )
+    parser.add_argument(
+        "--prompt_required",
+        type=bool,
+        default=False,
+        help="Whether a text is required for the policy",
     )
     parser.add_argument(
         "--config_path",
@@ -217,6 +210,7 @@ def main() -> None:
 
     for ep in tqdm(range(n_episodes), desc="Episodes", unit="ep"):
         robo_env.reset_scene()
+        break
         success = False
         time.sleep(5)
         robo_env.observation_space.wait_until_observation_space_is_ready()

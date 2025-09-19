@@ -6,7 +6,9 @@ from typing import Any
 
 import numpy as np
 import yaml
-from arktypes.utils import unpack as _unpack, pack
+from arktypes.utils import unpack
+
+from arkml.utils.utils import _resolve_channel_types
 
 
 def load_schema(config_path: str) -> dict:
@@ -30,197 +32,117 @@ def load_schema(config_path: str) -> dict:
     return cfg_dict
 
 
-# -------------------------
-# Observation unpacking
-# -------------------------
-
-
-def _extract_from_message(msg: Any, using: str, select: str, index: int | None = None):
-    """Extract a field from an Ark types message using a standard unpacker.
-
+def get_ark_fn_type(ark_module: unpack, name: str):
+    """
+    Retrieve both an unpacking function and its corresponding type from Ark module.
     Args:
-      msg: Serialized LCM message object from `ObservationSpace`.
-      using: Name of unpack function under `arktypes.utils.unpack`.
-      select: Name of the returned field to select.
-      index: Optional index for vector-like fields (e.g., a specific joint).
+        ark_module: The module (e.g., ``arktypes.utils.unpack``) containing the
+        unpack functions and optional type definitions.
+        name: The base name of the function/type pair to retrieve.
 
     Returns:
-      np.ndarray or native type as extracted from the message.
+        A tuple (fn, dtype) where:
+          - fn is the unpacking function corresponding to ``name``.
+          - dtype is the associated type object if defined, otherwise None.
+
     """
-    fn = getattr(_unpack, using)
-    out = fn(msg)
-
-    # Map field names to tuple positions for common arktypes unpackers.
-    # Users can extend this by providing schema with explicit `field_idx` later if needed.
-    FIELD_MAP = {
-        # rigid_body_state(): name, position, orientation, lin_vel, ang_vel
-        "rigid_body_state": {
-            "name": 0,
-            "position": 1,
-            "orientation": 2,
-            "lin_vel": 3,
-            "ang_vel": 4,
-        },
-        # joint_state(): name, effort, position, velocity, name_to_idx
-        "joint_state": {
-            "name": 0,
-            "effort": 1,
-            "position": 2,
-            "velocity": 3,
-            "name_to_idx": 4,
-        },
-        # pose(): position, quaternion
-        "pose": {"position": 0, "quaternion": 1},
-        # rgbd(): rgb, depth
-        "rgbd": {"rgb": 0, "depth": 1},
-    }
-
-    if using not in FIELD_MAP:
-        raise ValueError(
-            f"Unsupported unpacker '{using}'. Extend FIELD_MAP or provide another schema."
-        )
-
-    idx = FIELD_MAP[using].get(select)
-    if idx is None:
-        raise ValueError(f"Unsupported select '{select}' for unpacker '{using}'.")
-
-    value = out[idx]
-
-    # Indexing inside vectors, e.g., a specific joint position
-    if index is not None:
-        value = np.asarray(value)[index]
-
-    return value
+    fn = getattr(ark_module, name)
+    dtype = getattr(ark_module, f"{name}_t", None)
+    return fn, dtype
 
 
-def make_observation_unpacker(schema: dict) -> Callable[..., dict[str, Any]]:
-    """Create an observation unpacker from schema.
+def get_observation_channel_types(schema: dict) -> dict[str, type]:
+    """
+    Generate a mapping of observation channel names to Python/Ark types
+    based on the observation schema.
 
-    The resulting function has signature:
-      unpacker(observation_dict: dict[str, Any], obs_keys: list[str] | None = None,
-               only: list[str] | str | None = None) -> dict[str, Any]
+    Args:
+        schema (dict): Observation schema dictionary (from YAML or Python dict).
+            Each channel entry can optionally include a 'type' key, which can be
+            a string corresponding to a class in `arktypes` or a Python type.
+
+    Returns:
+        Dict[str, type]: Dictionary mapping channel name to resolved type.
+    """
+    channels: dict[str, Any] = {}
+
+    obs_schema = schema.get("observation", {})
+
+    for key, entries in obs_schema.items():
+        for item in entries:
+            ch_name = item["from"]
+            using = item["using"]
+            _, ch_type = get_ark_fn_type(ark_module=unpack, name=using)
+            if ch_name not in channels:
+                channels[ch_name] = ch_type
+
+    # Resolve type strings to actual type objects using _resolve_channel_types
+    resolved_channels = _resolve_channel_types(channels)
+    return resolved_channels
+
+
+def _dynamic_observation_unpacker(schema: dict) -> Callable:
+    """
+    Create a dynamic observation unpacker based on a schema.
+
+    The schema should be in the format:
+    observation:
+      state:
+        - from: channel_name
+          using: callable
+      image_top:
+        - from: channel_name
+          using: callable
+          wrap: True  # optional
+
+    Returns a function:
+        _unpack(observation_dict) -> dict
     """
 
-    obs_schema = (schema or {}).get("observation", {})
-    outputs: dict = obs_schema.get("outputs", {})
+    obs_schema = schema.get("observation", {})
 
-    def _unpack(
-        observation_dict: dict[str, Any],
-        obs_keys: list[str] | None = None,
-        only: list[str] | str | None = None,
-    ) -> dict[str, Any] | None:
-        if not observation_dict or any(v is None for v in observation_dict.values()):
-            return None
-
-        # Normalize filter
-        if isinstance(only, str):
-            requested = {only}
-        elif isinstance(only, list):
-            requested = set(only)
-        else:
-            requested = None
+    def _unpack(observation_dict: dict[str, Any]) -> dict[str, Any]:
+        if not observation_dict:
+            return {}
 
         result: dict[str, Any] = {}
 
-        for out_key, spec in outputs.items():
-            if requested is not None and out_key not in requested:
-                continue
-
-            if "concat" in spec:
-                parts = []
-                for item in spec["concat"]:
-                    ch = item["from"]
-                    using = item["using"]
-                    select = item.get("select", "")
-                    index = item.get("index", None)
-                    wrap = item.get("wrap", False)
-
-                    msg = observation_dict.get(ch)
-                    if msg is None:
-                        raise KeyError(
-                            f"Missing observation channel '{ch}'. Check channel_config and schema."
-                        )
-                    val = _extract_from_message(
-                        msg, using=using, select=select, index=index
-                    )
-                    if wrap:
-                        parts.append([val])
-                    else:
-                        parts.append(np.asarray(val))
-
-                # Try concatenating; if incompatible shapes, store as list
-                try:
-                    result[out_key] = np.concatenate(parts)
-                except Exception:
-                    result[out_key] = parts
-            else:
-                # Single source
-                ch = spec["from"]
-                using = spec["using"]
-                select = spec.get("select", "")
-                index = spec.get("index", None)
-                wrap = spec.get("wrap", False)
-
-                msg = observation_dict.get(ch)
+        for key, entries in obs_schema.items():
+            parts = []
+            for item in entries:
+                ch_name = item["from"]
+                wrap = item.get("wrap", False)
+                using = item["using"]
+                msg = observation_dict.get(ch_name)
                 if msg is None:
-                    raise KeyError(
-                        f"Missing observation channel '{ch}'. Check channel_config and schema."
-                    )
-                val = _extract_from_message(
-                    msg, using=using, select=select, index=index
-                )
+                    raise KeyError(f"Missing observation channel '{ch_name}'")
+
+                fn, dtype = get_ark_fn_type(ark_module=unpack, name=using)
+                val = fn(msg)
 
                 if wrap:
-                    # Some policies expect a list of images, etc.
-                    result[out_key] = [val]
+                    val = [val]  # wrap in the list for batch-like outputs
+
+                parts.append(val)
+
+            # Concatenate numeric arrays for state-like features
+            try:
+                if all(isinstance(p, np.ndarray) for p in parts):
+                    result[key] = np.concatenate(parts)
                 else:
-                    result[out_key] = val
+                    result[key] = parts if len(parts) > 1 else parts[0]
+            except (ValueError, TypeError):
+                result[key] = parts
 
         return result
 
     return _unpack
 
 
-# -------------------------
-# Action packing
-# -------------------------
-
-
-def make_action_packer(schema: dict) -> Callable[..., dict[str, Any]]:
-    """Create an action packer from schema.
-
-    The resulting function has signature:
-      packer(action: list[float] | np.ndarray, action_keys: list[str] | None = None) -> dict[str, Any]
-    """
-
-    act_schema = (schema or {}).get("action", {})
-    using = act_schema.get("using")
-    channel = act_schema.get("channel")
-
-    if using is None or channel is None:
-        raise ValueError("Action schema must define both 'using' and 'channel'.")
-
-    def _pack(
-        action: list[float] | np.ndarray, action_keys: list[str] | None = None
-    ) -> dict[str, Any]:
-        a = np.asarray(action).tolist()
-
-        if using == "task_space_command":
-            # Expected fields mapping in schema
-            idx = act_schema.get("indices", {})
-            xyz_idx: list[int] = idx.get("xyz", [0, 1, 2])
-            quat_idx: list[int] = idx.get("quat", [3, 4, 5, 6])
-            grip_idx: int = idx.get("gripper", 7)
-
-            xyz = np.array([a[i] for i in xyz_idx])
-            quat = np.array([a[i] for i in quat_idx])
-            grip = a[grip_idx]
-
-            msg = pack.task_space_command("all", xyz, quat, grip)
-            return {channel: msg}
-
-        raise ValueError(
-            f"Unsupported packer '{using}'. Extend implementation as needed."
-        )
-
-    return _pack
+if __name__ == "__main__":
+    global_config_path = (
+        "ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml"
+    )
+    global_schema = load_schema(config_path=global_config_path)
+    channel_schema = load_schema(config_path=global_schema["channel_config"])
+    obs_channels = get_observation_channel_types(schema=channel_schema)

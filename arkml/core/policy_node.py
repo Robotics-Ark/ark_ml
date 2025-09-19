@@ -13,6 +13,11 @@ from arkml.utils.utils import _resolve_channel_types
 from arktypes import flag_t, string_t
 from torch import nn
 
+from arkml.utils.schema_io import (
+    get_observation_channel_types,
+    _dynamic_observation_unpacker,
+)
+
 
 class PolicyNode(ABC, BaseNode):
     """Abstract base class for policy wrappers with async inference.
@@ -30,35 +35,22 @@ class PolicyNode(ABC, BaseNode):
         policy: nn.Module,
         policy_name: str,
         device: str,
-        observation_unpacking: Callable,
         global_config=None,
     ):
         super().__init__(policy_name, global_config)
 
-        # Channel config to publish and subscribe
         cfg_dict = load_schema(config_path=global_config)
 
         if "channel_config" not in cfg_dict:
             raise ValueError("channel_config must not be empty and properly configured")
 
-        channel_config = cfg_dict["channel_config"]
-        observation_channels = channel_config.get("observation_channels", {})
-        action_channels = channel_config.get("action_channels", {})
-
-        obs_keys = list(observation_channels.keys())
-        action_keys = list(action_channels.keys())
-
-        self.observation_unpacking = partial(observation_unpacking, obs_keys=obs_keys)
-
-        obs_channels = _resolve_channel_types(observation_channels)
-
-        act_channels = _resolve_channel_types(action_channels)
+        schema = load_schema(config_path=cfg_dict["channel_config"])
+        # Channel config to get observations
+        obs_channels = get_observation_channel_types(schema=schema)
+        self.observation_unpacking = _dynamic_observation_unpacker(schema)
 
         if not obs_channels:
             raise NotImplementedError("No observation channels found")
-
-        if not act_channels:
-            raise NotImplementedError("No action channels found")
 
         self.observation_space = ObservationSpace(
             obs_channels, self.observation_unpacking, self._lcm

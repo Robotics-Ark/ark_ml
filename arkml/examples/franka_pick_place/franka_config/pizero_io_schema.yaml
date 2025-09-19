@@ -1,21 +1,11 @@
 observation:
-  outputs:
-    state:
-      concat:
-        # Gripper opening from joint positions (use the second last joint as in current utils)
-        - from: franka/joint_states/sim
-          using: joint_state
-          select: position
-        # End-effector position
-        - from: franka/ee_state/sim
-          using: pose
-          select: position
+  state:
+    - from: franka/joint_states/sim
+      using: joint_state
+      select: position
 
-    # Return images as a list for downstream policy that expects a batch-like list
-    image_top:
-      from: IntelRealSense/rgbd/sim
+  image_top:
+    - from: IntelRealSense/rgbd/sim
       using: rgbd
-      select: rgb
+      select: [rgb]
       wrap: true
-
-
