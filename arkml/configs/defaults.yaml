@@ -5,7 +5,6 @@ defaults:
 # general overrides
 seed: 42
 output_dir: ./outputs
-checkpoint: None
 task_prompt: ""
 n_episodes: 1
 max_steps: 500

@@ -7,11 +7,13 @@ import torch
 from arkml.core.algorithm import BaseAlgorithm
 from arkml.core.policy import BasePolicy
 from arkml.core.registry import ALGOS
+from arkml.utils.utils import _normalise_shape
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 
 from .compute_stats import compute_pizero_stats
+from .config_utils import resolve_visual_feature_names
 from .dataset import PiZeroDataset
 from .evaluator import PiZeroEvaluator
 from .trainer import PiZeroTrainer
@@ -47,20 +49,23 @@ class PiZeroAlgorithm(BaseAlgorithm):
             ]
         )
         visual_features_cfg = getattr(cfg.algo.model, "visual_input_features", None)
+        visual_features = resolve_visual_feature_names(visual_features_cfg)
+
+        img_dim = _normalise_shape(cfg.algo.model.image_dim)
 
         dataset = PiZeroDataset(
             dataset_path=cfg.data.dataset_path,
             transform=transform,
             task_prompt=cfg.task_prompt,
             pred_horizon=cfg.algo.model.pred_horizon,
-            visual_input_features=visual_features_cfg,
+            visual_input_features=visual_features,
         )
         self.calculate_dataset_stats(
             dataset_path=cfg.data.dataset_path,
-            visual_input_features=visual_features_cfg,
+            visual_input_features=visual_features,
             obs_dim=cfg.algo.model.obs_dim,
             action_dim=cfg.algo.model.action_dim,
-            image_dim=tuple(cfg.algo.model.image_dim),
+            image_dim=img_dim,
         )
 
         # Train/val split (80/20)
@@ -108,7 +113,7 @@ class PiZeroAlgorithm(BaseAlgorithm):
             dataloader=self.train_loader,
             device=self.device,
             lr=self.cfg.algo.trainer.lr,
-            weight_decay=getattr(self.cfg.algo.lora, "weight_decay", 0.0),
+            weight_decay=getattr(self.cfg.algo.trainer, "weight_decay", 0.0),
             num_epochs=getattr(self.cfg.algo.trainer, "max_epochs", 3),
             grad_accum=getattr(self.cfg.algo.trainer, "grad_accum", 8),
             output_dir=str(os.path.join(self.cfg.output_dir, self.alg_name)),
@@ -142,10 +147,18 @@ class PiZeroAlgorithm(BaseAlgorithm):
         image_dim: tuple[int, int, int],
     ) -> None:
         """
-        Calculate the dataset statistics.
+        Compute and save dataset statistics for the PiZero algorithm.
         Args:
-            dataset_path: The dataset path.
+            dataset_path: Path to the dataset directory containing trajectory files.
+            visual_input_features: Names of camera/image features to include in statistics computation.
+            obs_dim: Dimension of the observation state vector.
+            action_dim: Dimension of the action vector.
+            image_dim: Dimensions of image data in (channels, height, width) format.
+
+        Returns:
+            None
         """
+
         try:
             stats_path = Path(dataset_path) / "pizero_stats.json"
             print(f"[PiZeroAlgorithm] Computing dataset stats → {stats_path}")

@@ -1,9 +1,9 @@
 import argparse
 import json
 import time
+from pathlib import Path
 from typing import Any
 
-import numpy as np
 from ark.env.ark_env import ArkEnv
 from ark.tools.log import log
 from arktypes import flag_t, string_t
@@ -36,34 +36,15 @@ def default_channels() -> dict[str, dict[str, type]]:
 import numpy as np
 
 
-def convert_ndarray_to_list(obj):
-    """
-    Recursively convert any ndarray in a dict, list, or tuple to a list.
-    """
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    elif isinstance(obj, dict):
-        return {k: convert_ndarray_to_list(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_ndarray_to_list(v) for v in obj]
-    elif isinstance(obj, tuple):
-        return tuple(convert_ndarray_to_list(v) for v in obj)
-    else:
-        return obj
-
-
 class RobotNode(ArkEnv):
 
-    def __init__(self, max_steps):
-        config = (
-            "ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml"
-        )
+    def __init__(self, max_steps: int, config_path: str):
         chans = default_channels()
         super().__init__(
             environment_name="diffusion_env",
             action_channels=chans["actions"],
             observation_channels=chans["observations"],
-            global_config=config,
+            global_config=Path(config_path),
             sim=True,
         )
 
@@ -169,6 +150,7 @@ class RobotNode(ArkEnv):
         # Give subsystems a moment to settle
         time.sleep(1.0)
 
+
 def main() -> None:
     """Run rollouts for a configured policy.
 
@@ -200,14 +182,28 @@ def main() -> None:
         default=500,
         help="Maximum number of steps per episode (default: 500)",
     )
+    parser.add_argument(
+        "--policy_node_name",
+        type=str,
+        default="Policy",
+        help="Policy node name",
+    )
+    parser.add_argument(
+        "--config_path",
+        type=str,
+        default="ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml",
+        help="Global config path",
+    )
 
     args = parser.parse_args()
 
     step_sleep = args.step_sleep
     n_episodes = args.n_episodes
     max_step = args.max_step
+    policy_node = args.policy_node_name
+    config_path = args.config_path
 
-    robo_env = RobotNode(max_steps=max_step)
+    robo_env = RobotNode(max_steps=max_step, config_path=config_path)
 
     success_count = 0
     failure_count = 0
@@ -221,7 +217,7 @@ def main() -> None:
             range(max_step), desc=f"Ep {ep}", unit="step", leave=False
         ):
             response = robo_env.send_service_request(
-                service_name="Policy/policy/predict",
+                service_name=f"{policy_node}/policy/predict",
                 request=flag_t(),
                 response_type=string_t,
             )
@@ -229,6 +225,9 @@ def main() -> None:
                 continue
 
             action = np.array(json.loads(response.data), dtype=np.float32)
+
+            if len(action) == 0:
+                continue
 
             observation, reward, terminated, truncated, info = robo_env.step(action)
 

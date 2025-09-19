@@ -7,59 +7,12 @@ from typing import Any
 
 import numpy as np
 
-from .config_utils import resolve_visual_feature_names
-
-
-def estimate_num_samples(
-    dataset_len: int,
-    min_num_samples: int = 100,
-    max_num_samples: int = 10_000,
-    power: float = 0.75,
-) -> int:
-    if dataset_len < min_num_samples:
-        min_num_samples = dataset_len
-    return max(min_num_samples, min(int(dataset_len**power), max_num_samples))
-
-
-def sample_indices(data_len: int) -> list[int]:
-    num_samples = estimate_num_samples(data_len)
-    if data_len <= 1:
-        return [0]
-    return np.round(np.linspace(0, data_len - 1, num_samples)).astype(int).tolist()
-
-
-def _accumulate_moments(x: np.ndarray, state: dict[str, Any]) -> None:
-    x = np.asarray(x)
-    n = x.shape[0]
-    state["count"] += n
-    state["sum"] += x.sum(axis=0)
-    state["sumsq"] += np.square(x).sum(axis=0)
-    state["min"] = np.minimum(state["min"], x.min(axis=0))
-    state["max"] = np.maximum(state["max"], x.max(axis=0))
-
-
-def _finalize_stats(state: dict[str, Any]) -> dict[str, np.ndarray]:
-    count = max(1, int(state["count"]))
-    mean = state["sum"] / count
-    var = np.maximum(0.0, state["sumsq"] / count - np.square(mean))
-    std = np.sqrt(var)
-    return {
-        "min": state["min"],
-        "max": state["max"],
-        "mean": mean,
-        "std": std,
-        "count": np.array([count], dtype=np.int64),
-    }
-
-
-def _init_state(shape: tuple[int, ...], dtype=np.float64) -> dict[str, Any]:
-    return {
-        "count": 0,
-        "sum": np.zeros(shape, dtype=dtype),
-        "sumsq": np.zeros(shape, dtype=dtype),
-        "min": np.full(shape, np.inf, dtype=dtype),
-        "max": np.full(shape, -np.inf, dtype=dtype),
-    }
+from arkml.utils.stats import (
+    _init_state,
+    sample_indices,
+    _accumulate_moments,
+    _finalize_stats,
+)
 
 
 def _iter_trajectories(dataset_path: str):
@@ -87,7 +40,6 @@ def compute_pizero_stats(
     sample_images_only: bool = True,
     image_base_index: int = 9,
 ) -> dict[str, dict[str, Any]]:
-    camera_names = resolve_visual_feature_names(visual_input_features)
 
     trajectories = list(_iter_trajectories(dataset_path))
     if not trajectories:
@@ -96,17 +48,21 @@ def compute_pizero_stats(
     accumulators: dict[str, dict[str, Any]] = {}
     accumulators["observation.state"] = _init_state((obs_dim,), dtype=np.float64)
     accumulators["action"] = _init_state((action_dim,), dtype=np.float64)
-    for cam_name in camera_names:
+    for cam_name in visual_input_features:
         key = f"observation.images.{cam_name}"
         accumulators[key] = _init_state((image_channels,), dtype=np.float64)
 
     sample_idxs = (
-        set(sample_indices(len(trajectories))) if sample_images_only else set(range(len(trajectories)))
+        set(sample_indices(len(trajectories)))
+        if sample_images_only
+        else set(range(len(trajectories)))
     )
 
     for idx, traj in enumerate(trajectories):
         state_block = np.asarray(traj["state"][6], dtype=np.float64)
-        _accumulate_moments(state_block.reshape(1, -1), accumulators["observation.state"])
+        _accumulate_moments(
+            state_block.reshape(1, -1), accumulators["observation.state"]
+        )
 
         action = np.asarray(traj["action"], dtype=np.float64)
         if action.ndim == 1:
@@ -116,7 +72,7 @@ def compute_pizero_stats(
         if sample_images_only and idx not in sample_idxs:
             continue
 
-        for cam_idx, cam_name in enumerate(camera_names):
+        for cam_idx, cam_name in enumerate(visual_input_features):
             image_value = traj.get(cam_name)
             if image_value is None:
                 state_values = traj.get("state")
@@ -136,7 +92,7 @@ def compute_pizero_stats(
 
     stats = {key: _finalize_stats(acc) for key, acc in accumulators.items()}
 
-    for cam_name in camera_names:
+    for cam_name in visual_input_features:
         key = f"observation.images.{cam_name}"
         for stat_key in ("mean", "std", "min", "max"):
             stats[key][stat_key] = stats[key][stat_key].reshape(image_channels, 1, 1)

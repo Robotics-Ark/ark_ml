@@ -8,17 +8,15 @@ from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
 
-from .config_utils import resolve_visual_feature_names
-
 
 class PiZeroDataset(Dataset):
     def __init__(
         self,
         dataset_path,
         transform=None,
-        *args,
         visual_input_features=None,
         image_base_index: int = 9,
+        *args,
         **kwargs,
     ):
         self.task_prompt = kwargs.pop("task_prompt", None)
@@ -29,9 +27,7 @@ class PiZeroDataset(Dataset):
         super().__init__()
         self.dataset_path = dataset_path
         self.transform = transform or transforms.ToTensor()
-        self.visual_input_features = resolve_visual_feature_names(
-            visual_input_features
-        )
+        self.visual_input_features = visual_input_features
         self.image_base_index = image_base_index
 
         self.index_map = []

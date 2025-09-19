@@ -8,7 +8,6 @@ from arkml.algos.vla.pizero.config_utils import resolve_visual_feature_names
 from arkml.core.policy_node import PolicyNode
 from arkml.utils.schema_io import (
     load_schema,
-    make_action_packer,
     make_observation_unpacker,
 )
 
@@ -27,29 +26,25 @@ class PiZeroPolicyNode(PolicyNode):
             model_path=model_cfg.model_path,
             obs_dim=model_cfg.obs_dim,
             action_dim=model_cfg.action_dim,
-            image_dim=tuple(model_cfg.image_dim),
+            image_dim=model_cfg.image_dim,
             visual_input_features=self.visual_input_features,
         )
 
         io_schema_path = getattr(cfg, "io_schema", "default_io_schema.yaml")
         schema = load_schema(io_schema_path)
         obs_unpacker = make_observation_unpacker(schema)
-        act_packer = make_action_packer(schema)
 
         super().__init__(
             policy=policy,
             device=device,
             policy_name=cfg.policy_node_name,
             observation_unpacking=obs_unpacker,
-            action_packing=act_packer,
-            stepper_frequency=cfg.stepper_frequency,
             global_config=cfg.global_config,
         )
 
         self.policy.to_device(device)
         self.policy.reset()
         self.policy.set_eval_mode()
-        self.create_stepper(10, self.step)
         self.task_prompt = model_cfg.task_prompt or ""
 
         self.n_infer_actions = getattr(model_cfg, "pred_horizon", 10)
@@ -77,37 +72,16 @@ class PiZeroPolicyNode(PolicyNode):
 
         state_value = ob.get("state")
         if state_value is not None:
-            obs["state"] = self._to_tensor(state_value, add_batch=True)
+            state = torch.from_numpy(ob["state"]).float().unsqueeze(0)  # (1, D)
+            obs["state"] = torch.tensor(state, dtype=torch.float32)
 
         for cam_name in self.visual_input_features:
             value = ob.get(cam_name)
-            if value is None:
-                continue
-            obs[cam_name] = self._to_tensor(value, is_image=True)
+            img = torch.from_numpy(value.copy()).permute(2, 0, 1)  # (C, H, W)
+            img = img.float().div(255.0).unsqueeze(0)  # (1, C, H, W)
+            obs[cam_name] = torch.tensor(img.clone(), dtype=torch.float32)
 
         return obs
-
-    @staticmethod
-    def _to_tensor(value: Any, *, is_image: bool = False, add_batch: bool = False) -> torch.Tensor:
-        if isinstance(value, torch.Tensor):
-            tensor = value.clone().detach().float()
-        else:
-            array = np.asarray(value)
-            tensor = torch.from_numpy(array).float()
-
-        if is_image:
-            if tensor.dim() == 3:
-                if tensor.shape[0] not in {1, 3} and tensor.shape[-1] in {1, 3}:
-                    tensor = tensor.permute(2, 0, 1)
-                tensor = tensor.unsqueeze(0)
-            elif tensor.dim() == 4:
-                if tensor.shape[1] not in {1, 3} and tensor.shape[-1] in {1, 3}:
-                    tensor = tensor.permute(0, 3, 1, 2)
-            return tensor
-
-        if add_batch and tensor.dim() == 1:
-            tensor = tensor.unsqueeze(0)
-        return tensor.float()
 
     def predict(self, obs_seq):
         """Compute the action for the given observation batch.

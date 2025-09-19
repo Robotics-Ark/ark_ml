@@ -9,17 +9,16 @@ import yaml
 from arktypes.utils import unpack as _unpack, pack
 
 
-# -------------------------
-# Schema loading utilities
-# -------------------------
-
-
 def load_schema(config_path: str) -> dict:
-    """Load a YAML IO schema file.
+    """
+    Load a YAML configuration schema from a file.
+    Args:
+        config_path: Path to the YAML configuration file.
 
-    The schema defines how to unpack observations and pack actions in a
-    robot-agnostic way. See the example schema under
-    `ark_ml/arkml/examples/franka_pick_place/franka_config/io_schema.yaml`.
+    Returns:
+        The parsed configuration schema as a dictionary. If the file
+        contains no data, an empty dictionary is returned.
+
     """
     cfg_path = Path(config_path)
     if cfg_path.exists():
@@ -37,7 +36,7 @@ def load_schema(config_path: str) -> dict:
 
 
 def _extract_from_message(msg: Any, using: str, select: str, index: int | None = None):
-    """Extract a field from an arktypes message using a standard unpacker.
+    """Extract a field from an Ark types message using a standard unpacker.
 
     Args:
       msg: Serialized LCM message object from `ObservationSpace`.

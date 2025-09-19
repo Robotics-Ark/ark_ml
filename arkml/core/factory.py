@@ -1,8 +1,8 @@
-import ast
 import inspect
 from typing import Any
 
 from arkml.core.registry import MODELS
+from arkml.utils.utils import _normalise_shape
 from omegaconf import DictConfig, OmegaConf
 
 
@@ -10,17 +10,6 @@ def _to_plain_dict(cfg: DictConfig | dict[str, Any]) -> dict[str, Any]:
     if isinstance(cfg, DictConfig):
         return OmegaConf.to_container(cfg, resolve=True)  # type: ignore[return-value]
     return dict(cfg)
-
-
-def _normalise_shape(shape_dim: str):
-    try:
-        parsed = ast.literal_eval(shape_dim)
-        if isinstance(parsed, (list, tuple)):
-            return tuple(parsed)
-        else:
-            return shape_dim
-    except (ValueError, TypeError):
-        return shape_dim
 
 
 def _normalize_model_cfg(
@@ -41,8 +30,6 @@ def _normalize_model_cfg(
     if "image_dim" in params and isinstance(params["image_dim"], str):
         params["image_dim"] = _normalise_shape(params["image_dim"])
 
-    if "enable_lora" in params:
-        params.update(model_cfg["lora"])
 
     return str(model_name), params
 
