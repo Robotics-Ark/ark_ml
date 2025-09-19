@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -77,25 +78,25 @@ class PiZeroAlgorithm(BaseAlgorithm):
             [train_len, val_len],
             generator=torch.Generator().manual_seed(42),
         )
-
+        num_workers = cfg.algo.trainer.num_workers
         self.train_loader = DataLoader(
             train_dataset,
             batch_size=cfg.algo.trainer.batch_size,
             shuffle=True,
-            num_workers=cfg.algo.trainer.num_workers,
+            num_workers=num_workers,
             pin_memory=True,
-            persistent_workers=True,
+            persistent_workers=(num_workers > 0 and sys.platform != "win32"),
         )
         self.val_loader = DataLoader(
             val_dataset,
             batch_size=cfg.algo.trainer.batch_size,
             shuffle=False,
-            num_workers=cfg.algo.trainer.num_workers,
+            num_workers=num_workers,
             pin_memory=True,
-            persistent_workers=True,
+            persistent_workers=(num_workers > 0 and sys.platform != "win32"),
         )
 
-        print(f"Data split -> train: {train_len}, val: {val_len}")
+        print(f"Data split : train: {train_len}, val: {val_len}")
 
     def train(self, *args, **kwargs) -> Any:
         """Run training via the underlying trainer.
@@ -118,6 +119,8 @@ class PiZeroAlgorithm(BaseAlgorithm):
             grad_accum=getattr(self.cfg.algo.trainer, "grad_accum", 8),
             output_dir=str(os.path.join(self.cfg.output_dir, self.alg_name)),
             use_bf16=getattr(self.cfg.algo.trainer, "use_bf16", False),
+            val_dataloader=self.val_loader,
+            eval_every=1,
         )
         return trainer.fit()
 
@@ -161,7 +164,7 @@ class PiZeroAlgorithm(BaseAlgorithm):
 
         try:
             stats_path = Path(dataset_path) / "pizero_stats.json"
-            print(f"[PiZeroAlgorithm] Computing dataset stats → {stats_path}")
+            print(f"[PiZeroAlgorithm] Computing dataset stats : {stats_path}")
             stats = compute_pizero_stats(
                 dataset_path,
                 visual_input_features=visual_input_features,

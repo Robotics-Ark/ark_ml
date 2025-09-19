@@ -151,14 +151,12 @@ class RobotNode(ArkEnv):
         time.sleep(1.0)
 
 
-def main() -> None:
-    """Run rollouts for a configured policy.
-
-    Args:
-      cfg: Hydra configuration composed of ``defaults.yaml`` and overrides.
+def parse_args() -> argparse.Namespace:
+    """
+    Parses command-line arguments.
 
     Returns:
-      None. Prints progress and a final success summary to stdout.
+        Parsed arguments.
     """
 
     parser = argparse.ArgumentParser(
@@ -195,8 +193,17 @@ def main() -> None:
         help="Global config path",
     )
 
-    args = parser.parse_args()
+    return parser.parse_args()
 
+
+def main() -> None:
+    """Run rollouts for a configured policy.
+
+    Returns:
+      None.
+      Prints progress and a final success summary to stdout.
+    """
+    args = parse_args()
     step_sleep = args.step_sleep
     n_episodes = args.n_episodes
     max_step = args.max_step

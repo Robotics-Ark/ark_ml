@@ -66,7 +66,9 @@ class PiZeroDataset(Dataset):
 
         sample: dict[str, Any] = {"task": self.task_prompt}
 
-        state_array = np.asarray(trajectory["state"][6], dtype=np.float32)
+        state_array = np.asarray(
+            trajectory["state"][6], dtype=np.float32
+        )  # TODO handle proper index based on data collection pipeline
         sample["state"] = torch.from_numpy(state_array)
 
         for cam_index, cam_name in enumerate(self.visual_input_features):

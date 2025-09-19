@@ -59,7 +59,9 @@ def compute_pizero_stats(
     )
 
     for idx, traj in enumerate(trajectories):
-        state_block = np.asarray(traj["state"][6], dtype=np.float64)
+        state_block = np.asarray(
+            traj["state"][6], dtype=np.float64
+        )  # TODO handle proper index based on data collection pipeline
         _accumulate_moments(
             state_block.reshape(1, -1), accumulators["observation.state"]
         )

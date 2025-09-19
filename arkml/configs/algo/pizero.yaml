@@ -2,7 +2,7 @@ name: pizero
 model:
   type: PiZeroNet
   name: PiZeroNet
-  policy_type: pi0            # 'pi0' or 'smolvla'
+  policy_type: pi0            # 'pi0'
   model_path: lerobot/pi0
   obs_dim: 9
   action_dim: 8         # Action dimension
@@ -16,7 +16,7 @@ model:
 
 trainer:
   lr: 2e-4
-  batch_size: 16
+  batch_size: 8
   max_epochs: 10
   num_workers: 2
   use_bf16: true

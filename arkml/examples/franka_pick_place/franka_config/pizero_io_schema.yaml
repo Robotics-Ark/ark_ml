@@ -6,11 +6,10 @@ observation:
         - from: franka/joint_states/sim
           using: joint_state
           select: position
-#          index: -2
         # End-effector position
-#        - from: franka/ee_state/sim
-#          using: pose
-#          select: position
+        - from: franka/ee_state/sim
+          using: pose
+          select: position
 
     # Return images as a list for downstream policy that expects a batch-like list
     image_top:
@@ -19,14 +18,4 @@ observation:
       select: rgb
       wrap: true
 
-action:
-  # The output LCM channel to publish to
-  channel: franka/cartesian_command/sim
-  # The packer to use (supported: task_space_command)
-  using: task_space_command
-  # Index mapping from flat action vector
-  indices:
-    xyz: [0, 1, 2]
-    quat: [3, 4, 5, 6]
-    gripper: 7
 

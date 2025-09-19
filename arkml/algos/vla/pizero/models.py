@@ -11,7 +11,6 @@ from arkml.core.registry import MODELS
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.policies.normalize import Normalize, Unnormalize
 from lerobot.policies.pi0.modeling_pi0 import PI0Policy
-from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 from torch import tensor
 
 
@@ -20,10 +19,10 @@ class PiZeroNet(BasePolicy):
     """
     VLA PiZero policy wrapper that uses explicit lerobot policies with a switchable type models of that kind.
 
-    - policy_type: 'pi0' or 'smolvla'
+    - policy_type: 'pi0'
     - pretrained_model: HF hub id or local path. If None, uses a sensible default per type.
     - Numeric state only is supported out-of-the-box (passed as 'observation.state').
-      To use image-based policies like SmolVLA, pass a full observation dict with
+      To use image-based policies like Pi0, pass a full observation dict with
       the required image tensors and task string.
     """
 
@@ -45,12 +44,10 @@ class PiZeroNet(BasePolicy):
         self.visual_input_features = visual_input_features
 
         kind = policy_type.lower()
-        if kind not in {"pi0", "smolvla"}:
-            raise ValueError(
-                f"Unsupported policy_type '{policy_type}'. Use 'pi0' or 'smolvla'."
-            )
+        if kind != "pi0":
+            raise ValueError(f"Unsupported policy_type '{policy_type}'. Use 'pi0'.")
 
-        policy_class = PI0Policy if kind == "pi0" else SmolVLAPolicy
+        policy_class = PI0Policy
 
         self._policy = policy_class.from_pretrained(model_path)
 
@@ -82,8 +79,6 @@ class PiZeroNet(BasePolicy):
         Set the underlying policy to training mode.
         """
         self._policy.train()
-        for p in self._policy.parameters():
-            p.requires_grad = True
 
     def reset(self) -> None:
         """

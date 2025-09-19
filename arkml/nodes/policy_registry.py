@@ -81,23 +81,3 @@ def _build_pizero(
         cfg=cfg,
         device=device,
     )
-
-
-@register_policy("smolvla")
-def _build_smolvla(
-    cfg: DictConfig,
-    device: torch.device,
-):
-    """Build and return SmolVLA that reuses the PiZero builder."""
-    return _build_pizero(
-        cfg=cfg,
-        device=device,
-    )
-
-
-@register_policy("action_chunking_transformer")
-def _build_ACTransformer(cfg: DictConfig, device: torch.device):
-    """Build and return ACTransformer"""
-    from arkml.nodes.actransformer import ActPolicyNode
-
-    return ActPolicyNode(cfg=cfg, device=str(device))
