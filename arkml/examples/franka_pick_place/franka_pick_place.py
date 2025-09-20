@@ -1,8 +1,9 @@
 import argparse
+import json
 import time
+from pathlib import Path
 from typing import Any
 
-import numpy as np
 from ark.env.ark_env import ArkEnv
 from ark.tools.log import log
 from arktypes import flag_t, string_t
@@ -35,34 +36,15 @@ def default_channels() -> dict[str, dict[str, type]]:
 import numpy as np
 
 
-def convert_ndarray_to_list(obj):
-    """
-    Recursively convert any ndarray in a dict, list, or tuple to a list.
-    """
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    elif isinstance(obj, dict):
-        return {k: convert_ndarray_to_list(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_ndarray_to_list(v) for v in obj]
-    elif isinstance(obj, tuple):
-        return tuple(convert_ndarray_to_list(v) for v in obj)
-    else:
-        return obj
-
-
 class RobotNode(ArkEnv):
 
-    def __init__(self, max_steps):
-        config = (
-            "/Users/abhineetkumar/arkprojects/ark_diffusion_policies_on_franka/diffusion_policy/config/global_config.yaml"
-        )
+    def __init__(self, max_steps: int, config_path: str):
         chans = default_channels()
         super().__init__(
             environment_name="diffusion_env",
             action_channels=chans["actions"],
             observation_channels=chans["observations"],
-            global_config=config,
+            global_config=Path(config_path),
             sim=True,
         )
 
@@ -92,26 +74,13 @@ class RobotNode(ArkEnv):
         """
         cube_state = observation_dict["cube/ground_truth/sim"]
         target_state = observation_dict["target/ground_truth/sim"]
-        joint_state = observation_dict["franka/joint_states/sim"]
-        ee_state = observation_dict["franka/ee_state/sim"]
-        images = observation_dict["IntelRealSense/rgbd/sim"]
 
         _, cube_position, _, _, _ = unpack.rigid_body_state(cube_state)
         _, target_position, _, _, _ = unpack.rigid_body_state(target_state)
-        _, _, franka_joint_position, _, _ = unpack.joint_state(joint_state)
-        franka_ee_position, franka_ee_orientation = unpack.pose(ee_state)
-        rgb, depth = unpack.rgbd(images)
-
-        gripper_position = franka_joint_position[
-            -2
-        ]  # Assuming last two joints are gripper
 
         return {
             "cube": cube_position,
             "target": target_position,
-            "position": [franka_joint_position],
-            "franka_ee": (franka_ee_position, franka_ee_orientation),
-            "images": (rgb, depth),
         }
 
     def terminated_truncated_info(self, state, action, next_state):
@@ -168,14 +137,13 @@ class RobotNode(ArkEnv):
         # Give subsystems a moment to settle
         time.sleep(1.0)
 
-def main() -> None:
-    """Run rollouts for a configured policy.
 
-    Args:
-      cfg: Hydra configuration composed of ``defaults.yaml`` and overrides.
+def parse_args() -> argparse.Namespace:
+    """
+    Parses command-line arguments.
 
     Returns:
-      None. Prints progress and a final success summary to stdout.
+        Parsed arguments.
     """
 
     parser = argparse.ArgumentParser(
@@ -190,7 +158,7 @@ def main() -> None:
     parser.add_argument(
         "--n_episodes",
         type=int,
-        default=3,
+        default=1,
         help="Number of episodes to run (default: 3)",
     )
     parser.add_argument(
@@ -199,14 +167,51 @@ def main() -> None:
         default=500,
         help="Maximum number of steps per episode (default: 500)",
     )
+    parser.add_argument(
+        "--policy_node_name",
+        type=str,
+        default="Policy",
+        help="Policy node name",
+    )
+    parser.add_argument(
+        "--prompt_required",
+        type=bool,
+        default=False,
+        help="Whether a text is required for the policy",
+    )
+    parser.add_argument(
+        "--config_path",
+        type=str,
+        default="ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml",
+        help="Global config path",
+    )
+    parser.add_argument(
+        "--prompt",
+        type=str,
+        default="Pick the yellow cube and place it in the white background area of the table",
+        help="Global config path",
+    )
 
-    args = parser.parse_args()
+    return parser.parse_args()
 
+
+def main() -> None:
+    """Run rollouts for a configured policy.
+
+    Returns:
+      None.
+      Prints progress and a final success summary to stdout.
+    """
+    args = parse_args()
     step_sleep = args.step_sleep
     n_episodes = args.n_episodes
     max_step = args.max_step
+    policy_node = args.policy_node_name
+    config_path = args.config_path
 
-    robo_env = RobotNode(max_steps=max_step)
+    task_prompt = args.prompt
+
+    robo_env = RobotNode(max_steps=max_step, config_path=config_path)
 
     success_count = 0
     failure_count = 0
@@ -219,15 +224,20 @@ def main() -> None:
         for step_count in tqdm(
             range(max_step), desc=f"Ep {ep}", unit="step", leave=False
         ):
+            request = string_t()
+            request.data = task_prompt
             response = robo_env.send_service_request(
-                service_name="Policy/policy/predict",
-                request=flag_t(),
+                service_name=f"{policy_node}/policy/predict",
+                request=request,
                 response_type=string_t,
             )
             if response is None:
                 continue
 
             action = np.array(json.loads(response.data), dtype=np.float32)
+
+            if len(action) == 0:
+                continue
 
             observation, reward, terminated, truncated, info = robo_env.step(action)
 

@@ -2,40 +2,21 @@ name: pizero
 model:
   type: PiZeroNet
   name: PiZeroNet
-  policy_type: pi0            # 'pi0' or 'smolvla'
+  policy_type: pi0            # 'pi0'
   model_path: lerobot/pi0
-  obs_dim: 10
+  obs_dim: 9
   action_dim: 8         # Action dimension
   obs_horizon: 1        # Observation dimension
   pred_horizon: 1
   action_horizon: 1
   image_dim: (3, 480, 640) # Image dimension (b,c,h,w)
-  enable_lora: false
-  # Optional path to dataset stats JSON (see compute_stats.py)
-  dataset_stats_path: null
-  task_prompt: null
-
+  visual_input_features:
+    - image_top
 
 trainer:
   lr: 2e-4
-  batch_size: 16
+  batch_size: 8
   max_epochs: 10
   num_workers: 2
   use_bf16: true
-
-lora:
-  lora_modules:
-    - "q_proj"
-    - "k_proj"
-    - "v_proj"
-    - "o_proj"
-    - "fc1"
-    - "fc2"
-    - "up_proj"
-    - "down_proj"
-    - "gate_proj"
-  lr: 2e-4
-  lora_r: 16
-  lora_alpha: 32
-  lora_dropout: 0.05
-
+  weight_decay: 0.0

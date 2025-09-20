@@ -1,19 +1,23 @@
+import json
 import os
+import sys
+from pathlib import Path
 from typing import Any
 
 import torch
 from arkml.core.algorithm import BaseAlgorithm
 from arkml.core.policy import BasePolicy
 from arkml.core.registry import ALGOS
+from arkml.utils.utils import _normalise_shape
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 
-from pathlib import Path
+from .compute_stats import compute_pizero_stats
+from .config_utils import resolve_visual_feature_names
 from .dataset import PiZeroDataset
 from .evaluator import PiZeroEvaluator
 from .trainer import PiZeroTrainer
-from .compute_stats import compute_pizero_stats
 
 
 @ALGOS.register("pizero")
@@ -45,33 +49,25 @@ class PiZeroAlgorithm(BaseAlgorithm):
                 ),
             ]
         )
+        visual_features_cfg = getattr(cfg.algo.model, "visual_input_features", None)
+        visual_features = resolve_visual_feature_names(visual_features_cfg)
+
+        img_dim = _normalise_shape(cfg.algo.model.image_dim)
+
         dataset = PiZeroDataset(
             dataset_path=cfg.data.dataset_path,
             transform=transform,
             task_prompt=cfg.task_prompt,
             pred_horizon=cfg.algo.model.pred_horizon,
+            visual_input_features=visual_features,
         )
-
-        # Auto-compute dataset stats if missing and bind to model
-        try:
-            stats_path_cfg = getattr(cfg.algo.model, "dataset_stats_path", None)
-            stats_path = Path(stats_path_cfg) if stats_path_cfg else None
-            if stats_path is None:
-                # default location next to dataset
-                stats_path = Path(cfg.data.dataset_path) / "pizero_stats.json"
-            if not stats_path.exists():
-                print(f"[PiZeroAlgorithm] Computing dataset stats → {stats_path}")
-                stats = compute_pizero_stats(cfg.data.dataset_path, sample_images_only=True)
-                stats_path.parent.mkdir(parents=True, exist_ok=True)
-                import json
-
-                with open(stats_path, "w") as f:
-                    json.dump({k: {kk: vv.tolist() for kk, vv in d.items()} for k, d in stats.items()}, f, indent=2)
-            # Load stats into normalization buffers
-            if hasattr(self.model, "load_dataset_stats"):
-                self.model.load_dataset_stats(str(stats_path))
-        except Exception as e:
-            print(f"[PiZeroAlgorithm] Warning: failed to ensure dataset stats ({e})")
+        self.calculate_dataset_stats(
+            dataset_path=cfg.data.dataset_path,
+            visual_input_features=visual_features,
+            obs_dim=cfg.algo.model.obs_dim,
+            action_dim=cfg.algo.model.action_dim,
+            image_dim=img_dim,
+        )
 
         # Train/val split (80/20)
         total_len = len(dataset)
@@ -82,25 +78,25 @@ class PiZeroAlgorithm(BaseAlgorithm):
             [train_len, val_len],
             generator=torch.Generator().manual_seed(42),
         )
-
+        num_workers = cfg.algo.trainer.num_workers
         self.train_loader = DataLoader(
             train_dataset,
             batch_size=cfg.algo.trainer.batch_size,
             shuffle=True,
-            num_workers=cfg.algo.trainer.num_workers,
+            num_workers=num_workers,
             pin_memory=True,
-            persistent_workers=True,
+            persistent_workers=(num_workers > 0 and sys.platform != "win32"),
         )
         self.val_loader = DataLoader(
             val_dataset,
             batch_size=cfg.algo.trainer.batch_size,
             shuffle=False,
-            num_workers=cfg.algo.trainer.num_workers,
+            num_workers=num_workers,
             pin_memory=True,
-            persistent_workers=True,
+            persistent_workers=(num_workers > 0 and sys.platform != "win32"),
         )
 
-        print(f"Data split -> train: {train_len}, val: {val_len}")
+        print(f"Data split : train: {train_len}, val: {val_len}")
 
     def train(self, *args, **kwargs) -> Any:
         """Run training via the underlying trainer.
@@ -118,17 +114,13 @@ class PiZeroAlgorithm(BaseAlgorithm):
             dataloader=self.train_loader,
             device=self.device,
             lr=self.cfg.algo.trainer.lr,
-            weight_decay=(
-                getattr(self.cfg.algo.lora, "weight_decay", 0.0) if self.cfg else 0.0
-            ),
-            num_epochs=self.cfg.algo.trainer.max_epochs if self.cfg else 3,
-            grad_accum=(
-                getattr(self.cfg.algo.trainer, "grad_accum", 8) if self.cfg else 8
-            ),
+            weight_decay=getattr(self.cfg.algo.trainer, "weight_decay", 0.0),
+            num_epochs=getattr(self.cfg.algo.trainer, "max_epochs", 3),
+            grad_accum=getattr(self.cfg.algo.trainer, "grad_accum", 8),
             output_dir=str(os.path.join(self.cfg.output_dir, self.alg_name)),
-            use_bf16=(
-                getattr(self.cfg.algo.trainer, "use_bf16", False) if self.cfg else False
-            ),
+            use_bf16=getattr(self.cfg.algo.trainer, "use_bf16", False),
+            val_dataloader=self.val_loader,
+            eval_every=1,
         )
         return trainer.fit()
 
@@ -147,3 +139,53 @@ class PiZeroAlgorithm(BaseAlgorithm):
             device=self.device,
         )
         return evaluator.evaluate()
+
+    def calculate_dataset_stats(
+        self,
+        dataset_path,
+        *,
+        visual_input_features=None,
+        obs_dim: int,
+        action_dim: int,
+        image_dim: tuple[int, int, int],
+    ) -> None:
+        """
+        Compute and save dataset statistics for the PiZero algorithm.
+        Args:
+            dataset_path: Path to the dataset directory containing trajectory files.
+            visual_input_features: Names of camera/image features to include in statistics computation.
+            obs_dim: Dimension of the observation state vector.
+            action_dim: Dimension of the action vector.
+            image_dim: Dimensions of image data in (channels, height, width) format.
+
+        Returns:
+            None
+        """
+
+        try:
+            stats_path = Path(dataset_path) / "pizero_stats.json"
+            print(f"[PiZeroAlgorithm] Computing dataset stats : {stats_path}")
+            stats = compute_pizero_stats(
+                dataset_path,
+                visual_input_features=visual_input_features,
+                obs_dim=obs_dim,
+                action_dim=action_dim,
+                image_channels=image_dim[0],
+                sample_images_only=True,
+            )
+            stats_path.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(stats_path, "w") as f:
+                json.dump(
+                    {
+                        k: {kk: vv.tolist() for kk, vv in d.items()}
+                        for k, d in stats.items()
+                    },
+                    f,
+                    indent=2,
+                )
+
+            self.model.load_dataset_stats(str(stats_path))
+        except Exception as e:
+            print(f"[PiZeroAlgorithm] Warning: failed to ensure dataset stats ({e})")
+            raise RuntimeError(f"[PiZeroAlgorithm] Warning: {e}")

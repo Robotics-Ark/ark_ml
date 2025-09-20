@@ -5,16 +5,16 @@ defaults:
 # general overrides
 seed: 42
 output_dir: ./outputs
-checkpoint: None
 task_prompt: ""
 n_episodes: 1
 max_steps: 500
 step_sleep: 0.1
 
 # Policy Config
-policy_node_name: Policy
+node_name: Policy
 stepper_frequency: 5
 
 # Default channel config file used by PolicyNode. Override via CLI if needed.
 global_config: "/Users/abhineetkumar/actml/ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml"
 
+io_schema: ark_ml/arkml/examples/franka_pick_place/franka_config/pizero_io_schema.yaml

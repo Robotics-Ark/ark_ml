@@ -11,7 +11,6 @@ from arkml.core.registry import MODELS
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.policies.normalize import Normalize, Unnormalize
 from lerobot.policies.pi0.modeling_pi0 import PI0Policy
-from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 from torch import tensor
 
 
@@ -20,10 +19,10 @@ class PiZeroNet(BasePolicy):
     """
     VLA PiZero policy wrapper that uses explicit lerobot policies with a switchable type models of that kind.
 
-    - policy_type: 'pi0' or 'smolvla'
+    - policy_type: 'pi0'
     - pretrained_model: HF hub id or local path. If None, uses a sensible default per type.
     - Numeric state only is supported out-of-the-box (passed as 'observation.state').
-      To use image-based policies like SmolVLA, pass a full observation dict with
+      To use image-based policies like Pi0, pass a full observation dict with
       the required image tensors and task string.
     """
 
@@ -34,58 +33,26 @@ class PiZeroNet(BasePolicy):
         obs_dim: int,
         action_dim: int,
         image_dim: tuple,
-        # LoRA config
-        enable_lora: bool = False,
-        lora_modules: list = None,
-        # Optional dataset stats (LeRobot-compatible)
-        dataset_stats_path: str | None = None,
+        pred_horizon: int = 1,
+        visual_input_features=None,
     ):
         super().__init__()
         self.obs_dim = obs_dim
         self.action_dim = action_dim
         self.image_dim = image_dim
-        self._peft_module = None
         self.device = None
-
-        self._peft_attached = False
-
-        # LoRA Config
-        self.lora_modules = lora_modules or []
-        self.lora_params = []
-        self.is_lora_enabled = enable_lora
-        self._peft_attached = False
+        self.visual_input_features = visual_input_features
 
         kind = policy_type.lower()
-        if kind not in {"pi0", "smolvla"}:
-            raise ValueError(
-                f"Unsupported policy_type '{policy_type}'. Use 'pi0' or 'smolvla'."
-            )
+        if kind != "pi0":
+            raise ValueError(f"Unsupported policy_type '{policy_type}'. Use 'pi0'.")
 
-        policy_class = PI0Policy if kind == "pi0" else SmolVLAPolicy
+        policy_class = PI0Policy
 
         self._policy = policy_class.from_pretrained(model_path)
 
-
-        self._policy.config.input_features = {
-            "observation.images.image": PolicyFeature(
-                type=FeatureType.VISUAL, shape=self.image_dim
-            ),
-            "observation.state": PolicyFeature(
-                type=FeatureType.STATE, shape=(self.obs_dim,)
-            ),
-        }
-        self._policy.config.output_features = {
-            "action": PolicyFeature(type=FeatureType.ACTION, shape=(self.action_dim,)),
-        }
-
-
-        if self.is_lora_enabled:
-            raise NotImplementedError("Lora policies not implemented yet to VLA.")
-        else:
-            for p in self._policy.parameters():
-                p.requires_grad = True
-
-        self._policy.config.n_action_steps = 1
+        self._policy.config.n_action_steps = pred_horizon
+        self._load_input_output_features()
 
     def to_device(self, device: str) -> Any:
         """
@@ -139,15 +106,16 @@ class PiZeroNet(BasePolicy):
                 - "task": str (unchanged)
                 - "action": torch.Tensor on `self.device` (if present)
         """
-        obs = {
-            "observation.images.image": observation["image"].to(self.device),
-            "observation.state": observation["state"].to(self.device),
-            "task": observation["task"],
-        }
-        if "action" in observation:
-            obs["action"] = observation["action"].to(self.device)
-        if "action_is_pad" in observation:
-            obs["action_is_pad"] = observation["action_is_pad"].to(self.device)
+        obs = {}
+        for k, v in observation.items():
+            if k == "state":
+                obs["observation.state"] = v.to(self.device)
+            elif k == "task":
+                obs["task"] = v
+            elif k in {"action", "action_is_pad"}:
+                obs[k] = v.to(self.device)
+            elif k in self.visual_input_features:
+                obs[f"observation.images.{k}"] = v.to(self.device)
         return obs
 
     def predict(self, obs: dict[str, Any], **kwargs) -> tensor:
@@ -184,23 +152,20 @@ class PiZeroNet(BasePolicy):
             actions.append(self._policy.select_action(obs_prep))
         # Stack to (n, action_dim). select_action returns (batch=1, action_dim) or (action_dim)
 
-        actions = [a.squeeze(0) if a.dim() == 2 and a.size(0) == 1 else a for a in actions]
+        actions = [
+            a.squeeze(0) if a.dim() == 2 and a.size(0) == 1 else a for a in actions
+        ]
         return torch.stack(actions, dim=0)
 
     def get_trainable_params(self) -> list[nn.parameter]:
         """
         Return the parameters that should be optimized during training.
-        If LoRA is enabled, returns LoRA parameters; otherwise returns all
-        parameters of the underlying policy (and ensures they are trainable).
 
         Returns:
             List of parameters to optimize.
         """
-        if self.is_lora_enabled:
-            return self.lora_params
-        else:
-            params = [p for p in self._policy.parameters()]
-            return params
+        params = [p for p in self._policy.parameters()]
+        return params
 
     def forward(self, observation) -> tensor:
         """
@@ -223,8 +188,7 @@ class PiZeroNet(BasePolicy):
 
     def save_policy(self, out_dir: str) -> None:
         """
-        Save LoRA adapters for the policy  If LoRA is enabled and attached, delegates to `save_lora`.
-        Otherwise, save the full fine-tuned model via the underlying policy’s  `save_pretrained`.
+        Save the full fine-tuned model via the underlying policy’s  `save_pretrained`.
 
         Args:
             out_dir: Output directory to write model artifacts.
@@ -232,22 +196,8 @@ class PiZeroNet(BasePolicy):
         """
         os.makedirs(out_dir, exist_ok=True)
 
-        if self.is_lora_enabled and self._peft_attached:
-            self.save_lora(out_dir)
-        else:
-            self._policy.save_pretrained(out_dir)
-            print(f"[Model] Saved full model state_dict to {out_dir}")
-
-    def save_lora(self, out_dir: str) -> None:
-        """
-        Args:
-            out_dir: Output directory to write LoRA adapter weights.
-
-        Raises:
-            NotImplementedError: Always raised; LoRA saving is not implemented yet.
-
-        """
-        raise NotImplementedError
+        self._policy.save_pretrained(out_dir)
+        print(f"[Model] Saved full model state_dict to {out_dir}")
 
     def load_dataset_stats(self, dataset_stats_path: str) -> None:
         """
@@ -258,14 +208,15 @@ class PiZeroNet(BasePolicy):
                 for keys like 'observation.state', 'observation.images.image', 'action'.
         """
 
-
         stats_path = Path(dataset_stats_path)
         if not stats_path.exists():
             raise FileNotFoundError(f"Dataset stats file not found: {stats_path}")
 
         with open(stats_path, "r") as f:
             raw = json.load(f)
-        loaded_stats = {k: {kk: np.array(vv) for kk, vv in d.items()} for k, d in raw.items()}
+        loaded_stats = {
+            k: {kk: np.array(vv) for kk, vv in d.items()} for k, d in raw.items()
+        }
 
         norm_map = getattr(self._policy.config, "normalization_mapping", None)
         if norm_map is None:
@@ -282,3 +233,19 @@ class PiZeroNet(BasePolicy):
         self._policy.unnormalize_outputs = Unnormalize(
             self._policy.config.output_features, norm_map, loaded_stats
         )
+
+    def _load_input_output_features(self) -> None:
+        input_features = {
+            "observation.state": PolicyFeature(
+                type=FeatureType.STATE, shape=(self.obs_dim,)
+            )
+        }
+        for cam_name in self.visual_input_features:
+            input_features[f"observation.images.{cam_name}"] = PolicyFeature(
+                type=FeatureType.VISUAL, shape=self.image_dim
+            )
+        self._policy.config.input_features = input_features
+
+        self._policy.config.output_features = {
+            "action": PolicyFeature(type=FeatureType.ACTION, shape=(self.action_dim,))
+        }

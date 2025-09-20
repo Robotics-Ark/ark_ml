@@ -1,0 +1,13 @@
+observation:
+  state:
+    - from: franka/joint_states/sim
+      using: joint_state
+      select: [position]
+    - from: franka/ee_state/sim
+      using: pose
+      select: [position]
+
+  image_top:
+    - from: IntelRealSense/rgbd/sim
+      using: rgbd
+      select: [rgb]

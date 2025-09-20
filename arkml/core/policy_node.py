@@ -1,22 +1,22 @@
-import importlib
 import json
-import threading
-import time
 from abc import abstractmethod, ABC
 from collections.abc import Callable
 from functools import partial
-from pathlib import Path
 from typing import Any
 
 import numpy as np
-import yaml
 from ark.client.comm_infrastructure.base_node import BaseNode
-from ark.env.spaces import ActionSpace, ObservationSpace
+from ark.env.spaces import ObservationSpace
 from ark.tools.log import log
+from arkml.utils.schema_io import load_schema
+from arkml.utils.utils import _resolve_channel_types
 from arktypes import flag_t, string_t
 from torch import nn
 
-from arkml.utils.schema_io import load_schema
+from arkml.utils.schema_io import (
+    get_observation_channel_types,
+    _dynamic_observation_unpacker,
+)
 
 
 class PolicyNode(ABC, BaseNode):
@@ -27,7 +27,6 @@ class PolicyNode(ABC, BaseNode):
       device: Target device identifier (e.g., ``"cpu"``, ``"cuda"``).
       observation_unpacking: Function to unpack observations.
       action_packing: Function to pack actions.
-      stepper_frequency: Frequency of stepper.
       global_config: Global configuration path of the simulator or robot
     """
 
@@ -36,45 +35,27 @@ class PolicyNode(ABC, BaseNode):
         policy: nn.Module,
         policy_name: str,
         device: str,
-        observation_unpacking: Callable,
-        action_packing: Callable,
-        stepper_frequency: int,
         global_config=None,
     ):
         super().__init__(policy_name, global_config)
 
-        # Channel config to publish and subscribe
         cfg_dict = load_schema(config_path=global_config)
 
         if "channel_config" not in cfg_dict:
             raise ValueError("channel_config must not be empty and properly configured")
 
-        channel_config = cfg_dict["channel_config"]
-        observation_channels = channel_config.get("observation_channels", {})
-        action_channels = channel_config.get("action_channels", {})
-
-        obs_keys = list(observation_channels.keys())
-        action_keys = list(action_channels.keys())
-
-        self.observation_unpacking = partial(observation_unpacking, obs_keys=obs_keys)
-        self.action_packing = partial(action_packing, action_keys=action_keys)
-
-        obs_channels = self._resolve_channel_types(observation_channels)
-
-        act_channels = self._resolve_channel_types(action_channels)
+        schema = load_schema(config_path=cfg_dict["channel_config"])
+        # Channel config to get observations
+        obs_channels = get_observation_channel_types(schema=schema)
+        self.observation_unpacking = _dynamic_observation_unpacker(schema)
 
         if not obs_channels:
             raise NotImplementedError("No observation channels found")
 
-        if not act_channels:
-            raise NotImplementedError("No action channels found")
-
-        self.action_space = ActionSpace(act_channels, self.action_packing, self._lcm)
         self.observation_space = ObservationSpace(
             obs_channels, self.observation_unpacking, self._lcm
         )
 
-        self._multi_comm_handlers.append(self.action_space.action_space_publisher)
         self._multi_comm_handlers.append(
             self.observation_space.observation_space_listener
         )
@@ -86,26 +67,14 @@ class PolicyNode(ABC, BaseNode):
         self.latest_action = None
         self._stop_service = True
         self._resetting = False
-        self._stop_event = threading.Event()
-        self._publish_lock = threading.Lock()
 
-        # self.worker_thread = threading.Thread(
-        #     target=self._inference_worker, daemon=True
-        # )
-        # self.worker_thread.start()
-
-        # Stepper publishes actions at fixed control frequency
-        # self.create_stepper(stepper_frequency, self.step) #
-
-        # Create services - start, stop and reset policy state
+        # Create services - predict and reset policy state
         self._predict_service_name = f"{self.name}/policy/predict"
-        # self._start_service_name = f"{self.name}/policy/start"
-        # self._stop_service_name = f"{self.name}/policy/stop"
         self._reset_service_name = f"{self.name}/policy/reset"
 
         # predict
         self.create_service(
-            self._predict_service_name, flag_t, flag_t, self._callback_predict_service
+            self._predict_service_name, string_t, string_t, self._callback_predict_service
         )
 
         # reset
@@ -113,34 +82,19 @@ class PolicyNode(ABC, BaseNode):
             self._reset_service_name, flag_t, flag_t, self._callback_reset_service
         )
 
-    def _inference_worker(self):
-        """Background thread to run model inference asynchronously."""
-        while not self._stop_event.is_set():
-            self.latest_action = None
-            if self._stop_service:
-                time.sleep(0.05)
-                continue
-            self.observation_space.wait_until_observation_space_is_ready()
-            obs = self.observation_space.get_observation()
-            if obs is not None:
-                action = self.predict(obs)
-                log.info(f"[ACTION PREDICTED] : {action}")
-                self.latest_action = action
-
     def reset(self) -> None:
         """Reset the internal state of the policy."""
         # Block publishing immediately and clear any pending action
-        with self._publish_lock:
-            self._stop_service = True
-            self._resetting = True
-            self.observation_space.is_ready = False
-            self.suspend_communications(services=False)
-            self.latest_action = None
-            self.policy.reset()
-            # Allow subclasses to clear their own buffers
-            reset_hook = getattr(self, "_on_reset", None)
-            if callable(reset_hook):
-                reset_hook()
+        self._stop_service = True
+        self._resetting = True
+        self.observation_space.is_ready = False
+        self.suspend_communications(services=False)
+        self.latest_action = None
+        self.policy.reset()
+        # Allow subclasses to clear their own buffers
+        reset_hook = getattr(self, "_on_reset", None)
+        if callable(reset_hook):
+            reset_hook()
         self.resume_communications(services=False)
         self.observation_space.wait_until_observation_space_is_ready()
         _ = self.observation_space.get_observation()
@@ -159,61 +113,21 @@ class PolicyNode(ABC, BaseNode):
             log.error(f"[ERROR] Failed to reset policy state: {e}")
         return reset_status
 
-    def _callback_start_service(self, channel, msg) -> flag_t:
-        """Start policy prediction service"""
-        log.info(f"[INFO] Received callback to start service")
-        self._stop_service = False
-        return flag_t()
-
-    def _callback_stop_service(self, channel, msg) -> flag_t:
-        """Stop policy prediction service"""
-        log.info(f"[INFO] Received callback to stop service")
-        self._stop_service = True
-        return flag_t()
-
     def _callback_predict_service(self, channel, msg):
-        obs = self.observation_space.get_observation()
-        action = self.predict(obs)
-        log.info(f"[ACTION PREDICTED] : {action}")
-        json.dumps(action.tolist())
         response = string_t()
-        response.data = json.dumps(action.tolist())
+        if self._resetting:
+            response.data = []
+        else:
+            prompt = msg.data
+            obs = self.observation_space.get_observation()
+            obs["prompt"] = prompt
+            action = self.predict(obs)
+            log.info(f"[ACTION PREDICTED] : {action}")
+            response.data = json.dumps(action.tolist())
+
         return response
-
-    def step(self):
-        """Stepper loop: publish latest action if available."""
-        with self._publish_lock:
-            if self._stop_service or self.latest_action is None or self._resetting:
-                return
-            self.publish_action(self.latest_action)
-            self.latest_action = None
-
-    def publish_action(self, action: np.ndarray):
-        """Pack and publish action to downstream consumers."""
-        if action is None:
-            return
-
-        self.action_space.pack_and_publish(action)
 
     @abstractmethod
     def predict(self, obs_seq: dict[str, Any]) -> np.ndarray:
         """Compute the action(s) from observations."""
         ...
-
-    @staticmethod
-    def _resolve_channel_types(mapping: dict[str, Any]) -> dict[str, type]:
-        """Resolve type names from config into arktypes classes.
-
-        Accepts either already-imported classes or string names present in the
-        ``arktypes`` package. Returns a mapping of channel name to type.
-        """
-        if not mapping:
-            return {}
-        resolved: dict[str, type] = {}
-        arktypes_mod = importlib.import_module("arktypes")
-        for ch_name, t in mapping.items():
-            if isinstance(t, str):
-                resolved[ch_name] = getattr(arktypes_mod, t)
-            else:
-                resolved[ch_name] = t
-        return resolved
