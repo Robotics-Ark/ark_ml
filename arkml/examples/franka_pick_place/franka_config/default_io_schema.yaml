@@ -2,7 +2,7 @@ observation:
   state:
     - from: franka/joint_states/sim
       using: joint_state
-      select: position
+      select: [position]
     - from: franka/ee_state/sim
       using: pose
       select: [position]
@@ -11,4 +11,3 @@ observation:
     - from: IntelRealSense/rgbd/sim
       using: rgbd
       select: [rgb]
-      wrap: true

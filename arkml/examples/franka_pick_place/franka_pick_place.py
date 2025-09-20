@@ -185,6 +185,12 @@ def parse_args() -> argparse.Namespace:
         default="ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml",
         help="Global config path",
     )
+    parser.add_argument(
+        "--prompt",
+        type=str,
+        default="Pick the yellow cube and place it in the white background area of the table",
+        help="Global config path",
+    )
 
     return parser.parse_args()
 
@@ -203,6 +209,8 @@ def main() -> None:
     policy_node = args.policy_node_name
     config_path = args.config_path
 
+    task_prompt = args.prompt
+
     robo_env = RobotNode(max_steps=max_step, config_path=config_path)
 
     success_count = 0
@@ -210,16 +218,17 @@ def main() -> None:
 
     for ep in tqdm(range(n_episodes), desc="Episodes", unit="ep"):
         robo_env.reset_scene()
-        break
         success = False
         time.sleep(5)
         robo_env.observation_space.wait_until_observation_space_is_ready()
         for step_count in tqdm(
             range(max_step), desc=f"Ep {ep}", unit="step", leave=False
         ):
+            request = string_t()
+            request.data = task_prompt
             response = robo_env.send_service_request(
                 service_name=f"{policy_node}/policy/predict",
-                request=flag_t(),
+                request=request,
                 response_type=string_t,
             )
             if response is None:

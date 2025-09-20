@@ -6,9 +6,33 @@ from typing import Any
 
 import numpy as np
 import yaml
+from arkml.utils.utils import _resolve_channel_types
 from arktypes.utils import unpack
 
-from arkml.utils.utils import _resolve_channel_types
+FIELD_MAP: dict[str, dict[str, int]] = {
+    "joint_state": {
+        "header": 0,
+        "name": 1,
+        "position": 2,
+        "velocity": 3,
+        "effort": 4,
+    },
+    "pose": {
+        "position": 0,
+        "orientation": 1,
+    },
+    "rigid_body_state": {
+        "header": 0,
+        "position": 1,
+        "orientation": 2,
+        "linear_velocity": 3,
+        "angular_velocity": 4,
+    },
+    "rgbd": {
+        "rgb": 0,
+        "depth": 1,
+    },
+}
 
 
 def load_schema(config_path: str) -> dict:
@@ -113,12 +137,22 @@ def _dynamic_observation_unpacker(schema: dict) -> Callable:
                 ch_name = item["from"]
                 wrap = item.get("wrap", False)
                 using = item["using"]
+                select_fields = item.get("select", None)
                 msg = observation_dict.get(ch_name)
                 if msg is None:
                     raise KeyError(f"Missing observation channel '{ch_name}'")
 
                 fn, dtype = get_ark_fn_type(ark_module=unpack, name=using)
-                val = fn(msg)
+                ret = fn(msg)
+                if select_fields:
+                    field_map = FIELD_MAP.get(using, {})
+                    selected = []
+                    for f in select_fields:
+                        if f in field_map:
+                            selected.append(ret[field_map[f]])
+                    val = selected[0] if len(selected) == 1 else selected
+                else:
+                    val = ret
 
                 if wrap:
                     val = [val]  # wrap in the list for batch-like outputs
@@ -133,7 +167,6 @@ def _dynamic_observation_unpacker(schema: dict) -> Callable:
                     result[key] = parts if len(parts) > 1 else parts[0]
             except (ValueError, TypeError):
                 result[key] = parts
-
         return result
 
     return _unpack

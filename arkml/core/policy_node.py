@@ -74,7 +74,7 @@ class PolicyNode(ABC, BaseNode):
 
         # predict
         self.create_service(
-            self._predict_service_name, flag_t, flag_t, self._callback_predict_service
+            self._predict_service_name, string_t, string_t, self._callback_predict_service
         )
 
         # reset
@@ -118,7 +118,9 @@ class PolicyNode(ABC, BaseNode):
         if self._resetting:
             response.data = []
         else:
+            prompt = msg.data
             obs = self.observation_space.get_observation()
+            obs["prompt"] = prompt
             action = self.predict(obs)
             log.info(f"[ACTION PREDICTED] : {action}")
             response.data = json.dumps(action.tolist())

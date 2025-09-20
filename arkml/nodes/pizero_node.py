@@ -6,10 +6,6 @@ import torch
 from arkml.algos.vla.pizero.models import PiZeroNet
 from arkml.algos.vla.pizero.config_utils import resolve_visual_feature_names
 from arkml.core.policy_node import PolicyNode
-from arkml.utils.schema_io import (
-    load_schema,
-    make_observation_unpacker,
-)
 
 
 class PiZeroPolicyNode(PolicyNode):
@@ -40,7 +36,6 @@ class PiZeroPolicyNode(PolicyNode):
         self.policy.to_device(device)
         self.policy.reset()
         self.policy.set_eval_mode()
-        self.task_prompt = model_cfg.task_prompt or ""
 
         self.n_infer_actions = getattr(model_cfg, "pred_horizon", 10)
         self._action_queue: deque[np.ndarray] = deque()
@@ -48,7 +43,7 @@ class PiZeroPolicyNode(PolicyNode):
     def _on_reset(self):
         self._action_queue.clear()
 
-    def prepare_observation(self, ob: dict[str, Any], task_prompt: str):
+    def prepare_observation(self, ob: dict[str, Any]):
         """Convert a single raw env observation into a batched policy input.
 
         Notes:
@@ -58,7 +53,6 @@ class PiZeroPolicyNode(PolicyNode):
         Args:
           ob: Single observation dict from the env. Expected keys include
             ``state`` and any camera names listed in ``visual_input_features``.
-          task_prompt: Natural language task description to include in the batch.
 
         Returns:
           A batch dictionary with:
@@ -66,7 +60,7 @@ class PiZeroPolicyNode(PolicyNode):
             - ``state``: ``torch.FloatTensor`` of shape ``[1, D]`` if present.
             - ``task``: ``list[str]`` of length 1.
         """
-        obs: dict[str, Any] = {"task": [task_prompt]}
+        obs: dict[str, Any] = {"task": [ob.get("prompt")]}
 
         # State: accept numpy array or tensor, ensure [1, D] float32
         state_value = ob.get("state")
@@ -136,7 +130,7 @@ class PiZeroPolicyNode(PolicyNode):
         Returns:
           numpy.ndarray: Action vector for the first batch element.
         """
-        obs = self.prepare_observation(obs_seq, self.task_prompt)
+        obs = self.prepare_observation(obs_seq)
 
         if len(self._action_queue) == 0:
             with torch.no_grad():
