@@ -4,6 +4,7 @@ from typing import Any
 
 import numpy as np
 from ark.env.ark_env import ArkEnv
+from ark.tools.log import log
 from arktypes import flag_t, string_t
 from arktypes import (
     task_space_command_t,
@@ -12,7 +13,7 @@ from arktypes import (
     rigid_body_state_t,
     rgbd_t,
 )
-from arktypes.utils import unpack
+from arktypes.utils import pack, unpack
 from tqdm import tqdm
 
 
@@ -31,9 +32,28 @@ def default_channels() -> dict[str, dict[str, type]]:
     return {"actions": action_channels, "observations": observation_channels}
 
 
+import numpy as np
+
+
+def convert_ndarray_to_list(obj):
+    """
+    Recursively convert any ndarray in a dict, list, or tuple to a list.
+    """
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {k: convert_ndarray_to_list(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_ndarray_to_list(v) for v in obj]
+    elif isinstance(obj, tuple):
+        return tuple(convert_ndarray_to_list(v) for v in obj)
+    else:
+        return obj
+
+
 class RobotNode(ArkEnv):
 
-    def __init__(self):
+    def __init__(self, max_steps):
         config = (
             "/Users/abhineetkumar/arkprojects/ark_diffusion_policies_on_franka/diffusion_policy/config/global_config.yaml"
         )
@@ -46,53 +66,76 @@ class RobotNode(ArkEnv):
             sim=True,
         )
 
-    def action_packing(self, action: Any) -> dict[str, Any]:
-        """!Serialize an action.
+        self.max_steps = max_steps
 
-        This method converts the high level action passed to :func:`step` into
-        a dictionary that can be published over LCM.  The dictionary keys are
-        channel names and the values are already packed LCM messages.
-
-        @param action The high level action provided by the agent.
-        @return A mapping from channel names to packed LCM messages.
-        @rtype Dict[str, Any]
+    def action_packing(self, action):
         """
-        ...
+        Packs the action into a joint_group_command_t format.
 
-    def observation_unpacking(self, observation_dict: dict[str, Any]) -> Any:
-        """!Deserialize observations."""
-        ...
+        List of:
+        [EE X, EE_Y, EE_Z, EE_Quaternion_X, EE_Quaternion_Y, EE_Quaternion_Z, EE_Quaternion_W, Gripper]
+        """
+        xyz_command = np.array(action[:3])
+        quaternion_command = np.array(action[3:7])
+        gripper_command = action[7]
 
-    def terminated_truncated_info(
-        self, state: Any, action: Any, next_state: Any
-    ) -> tuple[bool, bool, Any]:
-        """!Evaluate episode status."""
-        return False, False, None
+        franka_cartesian_command = pack.task_space_command(
+            "all", xyz_command, quaternion_command, gripper_command
+        )
+        return {"franka/cartesian_command/sim": franka_cartesian_command}
+
+    def observation_unpacking(self, observation_dict):
+        """
+        Unpacks the observation from the environment.
+
+        Returns a dictionary with keys
+        """
+        cube_state = observation_dict["cube/ground_truth/sim"]
+        target_state = observation_dict["target/ground_truth/sim"]
+        joint_state = observation_dict["franka/joint_states/sim"]
+        ee_state = observation_dict["franka/ee_state/sim"]
+        images = observation_dict["IntelRealSense/rgbd/sim"]
+
+        _, cube_position, _, _, _ = unpack.rigid_body_state(cube_state)
+        _, target_position, _, _, _ = unpack.rigid_body_state(target_state)
+        _, _, franka_joint_position, _, _ = unpack.joint_state(joint_state)
+        franka_ee_position, franka_ee_orientation = unpack.pose(ee_state)
+        rgb, depth = unpack.rgbd(images)
+
+        gripper_position = franka_joint_position[
+            -2
+        ]  # Assuming last two joints are gripper
+
+        return {
+            "cube": cube_position,
+            "target": target_position,
+            "position": [franka_joint_position],
+            "franka_ee": (franka_ee_position, franka_ee_orientation),
+            "images": (rgb, depth),
+        }
+
+    def terminated_truncated_info(self, state, action, next_state):
+        cube_pos = np.array(state["cube"])
+        target_pos = np.array(state["target"])
+
+        # Terminate if cube is within 5 cm of target
+        distance = np.linalg.norm(cube_pos - target_pos)
+        terminated = distance < 0.1
+
+        if terminated:
+            print("Cube is close enough to the target. Terminating episode.")
+
+        if self.steps >= self.max_steps:
+            print("Max steps reached. Terminating episode.")
+            truncated = True
+        else:
+            truncated = False
+
+        return terminated, truncated, self.steps
 
     def reward(self, state: Any, action: Any, next_state: Any) -> float:
         """Compute the reward for a transition"""
         ...
-
-    def check_success(self, cube_pos, target_pos):
-        """Compute termination and truncation from the current state.
-
-        Supports both legacy dict states with ``cube``/``target`` entries and a
-        flat vector layout ``[cube(3), target(3), gripper(1), ee(3)]``.
-
-        Args:
-          state: Current state (dict or flat vector).
-          action: Applied action (unused).
-          next_state: Next state (unused).
-
-        Returns:
-          tuple: ``(terminated, truncated, steps)`` where ``terminated`` is
-          True if cube is within 0.1m of target; ``truncated`` is True if
-          ``max_steps`` reached; and ``steps`` is current step count.
-        """
-
-        distance = np.linalg.norm(cube_pos - target_pos)
-        terminated = bool(distance < 0.2)
-        return (terminated,)
 
     def reset_objects(self):
         """Reset key scene objects and internal step counter."""
@@ -109,20 +152,21 @@ class RobotNode(ArkEnv):
         """
 
         # Reset the policy node state at the beginning of the episode
+        observation = None
         try:
-
+            log.info("Resetting Policy Node ...")
             self.send_service_request(
                 service_name="Policy/policy/reset",
                 request=flag_t(),
                 response_type=string_t,
             )
-            self.reset()
+            log.info("Resetting Environment ...")
+            observation, info = self.reset()
 
         except Exception as e:
             print(f"Warning: Failed to reset policy via service: {e}")
         # Give subsystems a moment to settle
         time.sleep(1.0)
-
 
 def main() -> None:
     """Run rollouts for a configured policy.
@@ -162,55 +206,44 @@ def main() -> None:
     n_episodes = args.n_episodes
     max_step = args.max_step
 
-    robo_node = RobotNode()
+    robo_env = RobotNode(max_steps=max_step)
 
     success_count = 0
     failure_count = 0
 
     for ep in tqdm(range(n_episodes), desc="Episodes", unit="ep"):
-        robo_node.reset_scene()
+        robo_env.reset_scene()
         success = False
         time.sleep(5)
-        robo_node.send_service_request(
-            service_name="Policy/policy/start",
-            request=flag_t(),
-            response_type=flag_t,
-        )
+        robo_env.observation_space.wait_until_observation_space_is_ready()
         for step_count in tqdm(
-            range(max_step + 1), desc=f"Ep {ep}", unit="step", leave=False
+            range(max_step), desc=f"Ep {ep}", unit="step", leave=False
         ):
-            robo_node.observation_space.wait_until_observation_space_is_ready()
-            obs_dict = robo_node.observation_space.get_observation()
-            if obs_dict is None:
-                time.sleep(step_sleep)
+            response = robo_env.send_service_request(
+                service_name="Policy/policy/predict",
+                request=flag_t(),
+                response_type=string_t,
+            )
+            if response is None:
                 continue
 
-            cube_state = obs_dict["cube/ground_truth/sim"]
-            target_state = obs_dict["target/ground_truth/sim"]
+            action = np.array(json.loads(response.data), dtype=np.float32)
 
-            if not obs_dict or any(v is None for v in obs_dict.values()):
-                continue
+            observation, reward, terminated, truncated, info = robo_env.step(action)
 
-            _, cube_position, _, _, _ = unpack.rigid_body_state(cube_state)
-            _, target_position, _, _, _ = unpack.rigid_body_state(target_state)
-
-            terminated = robo_node.check_success(cube_position, target_position)
-            if terminated:
+            if terminated or truncated:
                 success = True
                 break
 
             step_count += 1
             time.sleep(step_sleep)
 
-        robo_node.send_service_request(
-            service_name="Policy/policy/stop",
-            request=flag_t(),
-            response_type=flag_t,
-        )
         if success:
             success_count += 1
+            print("EPISODE SUCCESS")
         else:
             failure_count += 1
+            print("EPISODE FAILED")
 
     # After all episodes
     success_rate = success_count / n_episodes * 100

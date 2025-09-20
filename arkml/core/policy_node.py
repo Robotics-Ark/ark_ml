@@ -1,4 +1,5 @@
 import importlib
+import json
 import threading
 import time
 from abc import abstractmethod, ABC
@@ -14,6 +15,8 @@ from ark.env.spaces import ActionSpace, ObservationSpace
 from ark.tools.log import log
 from arktypes import flag_t, string_t
 from torch import nn
+
+from arkml.utils.schema_io import load_schema
 
 
 class PolicyNode(ABC, BaseNode):
@@ -41,12 +44,7 @@ class PolicyNode(ABC, BaseNode):
         super().__init__(policy_name, global_config)
 
         # Channel config to publish and subscribe
-        channel_cfg_path = Path(global_config)
-        if channel_cfg_path.exists():
-            with open(channel_cfg_path, "r") as f:
-                cfg_dict = yaml.safe_load(f) or {}
-        else:
-            raise FileNotFoundError(f"Config file could not found {global_config}")
+        cfg_dict = load_schema(config_path=global_config)
 
         if "channel_config" not in cfg_dict:
             raise ValueError("channel_config must not be empty and properly configured")
@@ -91,27 +89,25 @@ class PolicyNode(ABC, BaseNode):
         self._stop_event = threading.Event()
         self._publish_lock = threading.Lock()
 
-        self.worker_thread = threading.Thread(
-            target=self._inference_worker, daemon=True
-        )
-        self.worker_thread.start()
+        # self.worker_thread = threading.Thread(
+        #     target=self._inference_worker, daemon=True
+        # )
+        # self.worker_thread.start()
 
         # Stepper publishes actions at fixed control frequency
-        self.create_stepper(stepper_frequency, self.step)
+        # self.create_stepper(stepper_frequency, self.step) #
 
         # Create services - start, stop and reset policy state
-        self._start_service_name = f"{self.name}/policy/start"
-        self._stop_service_name = f"{self.name}/policy/stop"
+        self._predict_service_name = f"{self.name}/policy/predict"
+        # self._start_service_name = f"{self.name}/policy/start"
+        # self._stop_service_name = f"{self.name}/policy/stop"
         self._reset_service_name = f"{self.name}/policy/reset"
 
-        # start
+        # predict
         self.create_service(
-            self._start_service_name, flag_t, flag_t, self._callback_start_service
+            self._predict_service_name, flag_t, flag_t, self._callback_predict_service
         )
-        # stop
-        self.create_service(
-            self._stop_service_name, flag_t, flag_t, self._callback_stop_service
-        )
+
         # reset
         self.create_service(
             self._reset_service_name, flag_t, flag_t, self._callback_reset_service
@@ -120,8 +116,8 @@ class PolicyNode(ABC, BaseNode):
     def _inference_worker(self):
         """Background thread to run model inference asynchronously."""
         while not self._stop_event.is_set():
+            self.latest_action = None
             if self._stop_service:
-                self.latest_action = None
                 time.sleep(0.05)
                 continue
             self.observation_space.wait_until_observation_space_is_ready()
@@ -174,6 +170,15 @@ class PolicyNode(ABC, BaseNode):
         log.info(f"[INFO] Received callback to stop service")
         self._stop_service = True
         return flag_t()
+
+    def _callback_predict_service(self, channel, msg):
+        obs = self.observation_space.get_observation()
+        action = self.predict(obs)
+        log.info(f"[ACTION PREDICTED] : {action}")
+        json.dumps(action.tolist())
+        response = string_t()
+        response.data = json.dumps(action.tolist())
+        return response
 
     def step(self):
         """Stepper loop: publish latest action if available."""

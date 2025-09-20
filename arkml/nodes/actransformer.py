@@ -59,7 +59,7 @@ class ActPolicyNode(PolicyNode):
             enc_layers=4,
             dec_layers=7,
             dropout=0.1,
-            max_len=256,
+            max_len=50,
         )
 
         super().__init__(
@@ -168,13 +168,4 @@ class ActPolicyNode(PolicyNode):
         )
         return actions_to_exec[-1]
 
-    def publish_action(self, action):
 
-        if action is None or action.shape[0] < 8:
-            return
-
-        xyz = np.asarray(action[:3], dtype=np.float32)
-        quat = np.asarray(action[3:7], dtype=np.float32)
-        grip = float(action[7])
-        msg = pack.task_space_command("next_action", xyz, quat, grip)
-        self.pub.publish(msg)
