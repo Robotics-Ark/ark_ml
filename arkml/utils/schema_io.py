@@ -35,7 +35,7 @@ FIELD_MAP: dict[str, dict[str, int]] = {
 }
 
 
-def load_schema(config_path: str) -> dict:
+def load_yaml(config_path: str) -> dict:
     """
     Load a YAML configuration schema from a file.
     Args:
@@ -176,6 +176,6 @@ if __name__ == "__main__":
     global_config_path = (
         "ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml"
     )
-    global_schema = load_schema(config_path=global_config_path)
-    channel_schema = load_schema(config_path=global_schema["channel_config"])
+    global_schema = load_yaml(config_path=global_config_path)
+    channel_schema = load_yaml(config_path=global_schema["channel_config"])
     obs_channels = get_observation_channel_types(schema=channel_schema)

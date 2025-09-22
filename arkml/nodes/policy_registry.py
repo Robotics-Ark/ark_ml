@@ -4,7 +4,7 @@ import torch
 from omegaconf import DictConfig
 
 # Global registry for policy node builders
-_POLICY_BUILDERS: dict[str, Callable[[DictConfig, torch.device], object]] = {}
+_POLICY_BUILDERS: dict[str, Callable] = {}
 
 
 def register_policy(key: str):
@@ -17,7 +17,7 @@ def register_policy(key: str):
         A decorator that registers the wrapped function as a builder.
     """
 
-    def _wrap(fn: Callable[[DictConfig, torch.device], object]):
+    def _wrap(fn: Callable[[DictConfig], object]):
         _POLICY_BUILDERS[key.lower()] = fn
         return fn
 
@@ -39,12 +39,11 @@ def _get_policy_key(cfg: DictConfig) -> str:
     return str(getattr(cfg.algo, "name", "")).lower()
 
 
-def get_policy_node(cfg: DictConfig, device: torch.device):
+def get_policy_node(cfg: DictConfig):
     """Instantiate the appropriate policy node based on configuration.
 
     Args:
       cfg: Configuration used to determine the policy type.
-      device: Target torch device for the underlying model.
 
     Returns:
       Policy node.
@@ -56,28 +55,17 @@ def get_policy_node(cfg: DictConfig, device: torch.device):
         raise NotImplementedError(
             f"No policy builder registered for key '{key}'. Available: {list(_POLICY_BUILDERS.keys())}"
         )
-    global_config = getattr(cfg, "global_config", None)
-    return builder(cfg, device)
+    return builder()
 
 
 @register_policy("pizero")
 @register_policy("pi0")
-def _build_pizero(
-    cfg: DictConfig,
-    device: torch.device,
-):
+def _build_pizero():
     """Build and return a PiZero policy node from config.
 
-    Args:
-      cfg: Hydra configuration with VLA model fields.
-      device: Target device string for the policy node.
-
     Returns:
-      Configured PiZeroPolicyNode  instance.
+      PiZeroPolicyNode .
     """
     from arkml.nodes.pizero_node import PiZeroPolicyNode
 
-    return PiZeroPolicyNode(
-        cfg=cfg,
-        device=device,
-    )
+    return PiZeroPolicyNode

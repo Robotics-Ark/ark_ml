@@ -1,22 +1,18 @@
 import json
 from abc import abstractmethod, ABC
-from collections.abc import Callable
-from functools import partial
 from typing import Any
 
 import numpy as np
 from ark.client.comm_infrastructure.base_node import BaseNode
 from ark.env.spaces import ObservationSpace
 from ark.tools.log import log
-from arkml.utils.schema_io import load_schema
-from arkml.utils.utils import _resolve_channel_types
-from arktypes import flag_t, string_t
-from torch import nn
-
 from arkml.utils.schema_io import (
     get_observation_channel_types,
     _dynamic_observation_unpacker,
 )
+from arkml.utils.schema_io import load_yaml
+from arktypes import flag_t, string_t
+from torch import nn
 
 
 class PolicyNode(ABC, BaseNode):
@@ -39,12 +35,12 @@ class PolicyNode(ABC, BaseNode):
     ):
         super().__init__(policy_name, global_config)
 
-        cfg_dict = load_schema(config_path=global_config)
+        cfg_dict = load_yaml(config_path=global_config)
 
         if "channel_config" not in cfg_dict:
             raise ValueError("channel_config must not be empty and properly configured")
 
-        schema = load_schema(config_path=cfg_dict["channel_config"])
+        schema = load_yaml(config_path=cfg_dict["channel_config"])
         # Channel config to get observations
         obs_channels = get_observation_channel_types(schema=schema)
         self.observation_unpacking = _dynamic_observation_unpacker(schema)
@@ -74,7 +70,10 @@ class PolicyNode(ABC, BaseNode):
 
         # predict
         self.create_service(
-            self._predict_service_name, string_t, string_t, self._callback_predict_service
+            self._predict_service_name,
+            string_t,
+            string_t,
+            self._callback_predict_service,
         )
 
         # reset

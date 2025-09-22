@@ -4,8 +4,10 @@ import time
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from ark.env.ark_env import ArkEnv
 from ark.tools.log import log
+from ark.utils.utils import load_yaml
 from arktypes import flag_t, string_t
 from arktypes import (
     task_space_command_t,
@@ -33,9 +35,6 @@ def default_channels() -> dict[str, dict[str, type]]:
     return {"actions": action_channels, "observations": observation_channels}
 
 
-import numpy as np
-
-
 class RobotNode(ArkEnv):
 
     def __init__(self, max_steps: int, config_path: str):
@@ -49,8 +48,16 @@ class RobotNode(ArkEnv):
         )
 
         self.max_steps = max_steps
+        self.config = load_yaml(config_path)
+        channel_name = self.config.get("channel", "user_input")
 
-    def action_packing(self, action):
+        # Subscribe the requested channel
+        self.sub = self.create_subscriber(
+            channel_name, string_t, self._callback_text_input
+        )
+
+    @staticmethod
+    def action_packing(action):
         """
         Packs the action into a joint_group_command_t format.
 
@@ -66,7 +73,8 @@ class RobotNode(ArkEnv):
         )
         return {"franka/cartesian_command/sim": franka_cartesian_command}
 
-    def observation_unpacking(self, observation_dict):
+    @staticmethod
+    def observation_unpacking(observation_dict):
         """
         Unpacks the observation from the environment.
 
@@ -137,6 +145,11 @@ class RobotNode(ArkEnv):
         # Give subsystems a moment to settle
         time.sleep(1.0)
 
+    def _callback_text_input(
+        self, channel_name: str, received_time: str, msg: string_t
+    ):
+        self.text_input = msg.data
+
 
 def parse_args() -> argparse.Namespace:
     """
@@ -185,12 +198,6 @@ def parse_args() -> argparse.Namespace:
         default="ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml",
         help="Global config path",
     )
-    parser.add_argument(
-        "--prompt",
-        type=str,
-        default="Pick the yellow cube and place it in the white background area of the table",
-        help="Global config path",
-    )
 
     return parser.parse_args()
 
@@ -209,8 +216,6 @@ def main() -> None:
     policy_node = args.policy_node_name
     config_path = args.config_path
 
-    task_prompt = args.prompt
-
     robo_env = RobotNode(max_steps=max_step, config_path=config_path)
 
     success_count = 0
@@ -225,7 +230,7 @@ def main() -> None:
             range(max_step), desc=f"Ep {ep}", unit="step", leave=False
         ):
             request = string_t()
-            request.data = task_prompt
+            request.data = robo_env.text_input
             response = robo_env.send_service_request(
                 service_name=f"{policy_node}/policy/predict",
                 request=request,
