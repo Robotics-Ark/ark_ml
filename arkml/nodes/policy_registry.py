@@ -70,7 +70,6 @@ def _build_pizero():
 
     return PiZeroPolicyNode
 
-
 @register_policy("action_chunking_transformer")
 def _build_ACTransformer(cfg: DictConfig, device: torch.device):
     """Build and return ACTransformer"""

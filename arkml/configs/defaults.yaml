@@ -1,6 +1,6 @@
 defaults:
   - algo: pizero
-  - data: act_dataset
+  - data: pizero_dataset
 
 # general overrides
 seed: 42
@@ -14,5 +14,4 @@ step_sleep: 0.1
 node_name: Policy
 
 # Default channel config file used by PolicyNode. Override via CLI if needed.
-global_config: "/nfs/rlteam2/abhineet/dsagent/agent/ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml"
-
+global_config: ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml

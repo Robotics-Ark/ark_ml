@@ -1,4 +1,3 @@
-
 simulator:
   name: "franka_pick_and_place"              # A unique name for your simulator node
   backend_type: "pybullet"                # The physics engine we're using
@@ -17,11 +16,10 @@ objects:
   - "objects/target.yaml"
 
 robots: 
-  - "/nfs/rlteam2/abhineet/dsagent/agent/ark_diffusion_policies_on_franka/diffusion_policy/config/robots/franka.yaml"
+  - "robots/franka.yaml"
 
 sensors:
-  - "/nfs/rlteam2/refi/ark/ark_diffusion_policies_on_franka/diffusion_policy/config/sensors/IntelRealSense.yaml"  # Path to robot configuration file
-
+  - "sensors/IntelRealSense.yaml"  # Path to robot configuration file
 
 text: "Pick the yellow cube and place it in the white background area of the table"
 

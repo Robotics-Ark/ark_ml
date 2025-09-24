@@ -218,7 +218,7 @@ def _dynamic_action_packer(schema: dict) -> Callable[..., dict[str, Any]]:
 
 if __name__ == "__main__":
     global_config_path = (
-        "/nfs/rlteam2/abhineet/dsagent/agent/ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml"
+        "ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml"
     )
     global_schema = load_yaml(config_path=global_config_path)
     channel_schema = load_yaml(config_path=global_schema["channel_config"])
