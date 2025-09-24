@@ -164,10 +164,13 @@ class PolicyNode(ABC, BaseNode):
 
     def get_next_action(self):
         """Compute the next action from observations."""
-        self.observation_space.wait_until_observation_space_is_ready()
         obs = self.observation_space.get_observation()
+        if obs is None:
+            return
         action = self.predict(obs)
         log.info(f"[ACTION PREDICTED] : {action}")
+        if action is None:
+            return
         self.action_space.pack_and_publish(action)
 
     @abstractmethod
