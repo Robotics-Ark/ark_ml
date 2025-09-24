@@ -69,3 +69,16 @@ def _build_pizero():
     from arkml.nodes.pizero_node import PiZeroPolicyNode
 
     return PiZeroPolicyNode
+
+
+@register_policy("diffusion_policy")
+def _build_diffusion(cfg: DictConfig, device: torch.device):
+    """Build and return a DiffusionPolicyNode from config.
+
+
+    Returns:
+      DiffusionPolicyNode.
+    """
+    from arkml.nodes.diffusion_node import DiffusionPolicyNode
+
+    return DiffusionPolicyNode
