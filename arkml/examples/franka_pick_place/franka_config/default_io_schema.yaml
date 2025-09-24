@@ -1,0 +1,23 @@
+observation:
+  state:
+    - from: franka/joint_states/sim
+      using: joint_state
+      select: [position]
+    - from: franka/ee_state/sim
+      using: pose
+      select: [position]
+
+  image_top:
+    - from: IntelRealSense/rgbd/sim
+      using: rgbd
+      select: [rgb]
+
+action:
+  action:
+    - from: franka/cartesian_command/sim
+      using: task_space_command
+      select:
+        name: "all"
+        xyz: [ 0, 1, 2 ]               # x, y, z
+        quat: [ 3, 4, 5, 6 ]           # quaternion indices
+        gripper: 7                   # single index

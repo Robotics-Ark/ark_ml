@@ -1,0 +1,17 @@
+defaults:
+  - algo: pizero
+  - data: pizero_dataset
+
+# general overrides
+seed: 42
+output_dir: ./outputs
+task_prompt: ""
+n_episodes: 1
+max_steps: 500
+step_sleep: 0.1
+
+# Policy Config
+node_name: Policy
+
+# Default channel config file used by PolicyNode. Override via CLI if needed.
+global_config: ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml

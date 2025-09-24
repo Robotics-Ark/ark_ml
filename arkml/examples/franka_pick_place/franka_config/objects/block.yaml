@@ -1,0 +1,21 @@
+name: "cube"
+config:
+  source: "primitive"
+  publish_ground_truth: True
+
+  visual:
+    shape_type: "GEOM_BOX"
+    visual_shape:
+      halfExtents: [0.05, 0.02, 0.03]
+      rgbaColor: [1.0, 1.0, 0.0, 1.0]
+
+  collision:
+    shape_type: "GEOM_BOX"
+    collision_shape:
+      halfExtents: [0.05, 0.02, 0.03]
+
+  multi_body:
+    baseMass: 0.1 
+
+  base_position: [0.25, 0.30, 0.2]
+  base_orientation: [0.0, 0.0, 0.0, 1.0]
