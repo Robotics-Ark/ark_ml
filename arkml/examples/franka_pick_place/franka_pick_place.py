@@ -287,7 +287,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--config_path",
         type=str,
-        default="ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml",
+        default="/nfs/rlteam2/abhineet/dsagent/agent/ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml",
         help="Global config path",
     )
 

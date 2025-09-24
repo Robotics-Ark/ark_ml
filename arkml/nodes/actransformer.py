@@ -40,7 +40,7 @@ class TemporalEnsembler:
 class ActPolicyNode(PolicyNode):
     def __init__(
         self,
-        model_cfg,
+        cfg,
         device="cpu",
         chunk_size=50,
         action_stride=8,
@@ -49,6 +49,7 @@ class ActPolicyNode(PolicyNode):
         """
         Returns `actions_to_exec` from predict()
         """
+
         policy = ACT(
             joint_dim=9,
             action_dim=8,
@@ -65,9 +66,10 @@ class ActPolicyNode(PolicyNode):
         super().__init__(
             policy=policy,
             device=device,
-            policy_name=model_cfg.policy_node_name,
-            global_config=model_cfg.global_config,
+            policy_name=cfg.node_name,
+            global_config=cfg.global_config,
         )
+        model_cfg = cfg.algo.model
         CKPT_PATH = model_cfg.checkpoint
         ckpt = torch.load(CKPT_PATH, map_location=device)
         policy.load_state_dict(ckpt["model_state_dict"])

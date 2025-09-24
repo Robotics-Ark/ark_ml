@@ -71,7 +71,8 @@ def _build_pizero():
     return PiZeroPolicyNode
 
 @register_policy("action_chunking_transformer")
-def _build_ACTransformer(cfg: DictConfig, device: torch.device):
+def _build_ACTransformer():
     """Build and return ACTransformer"""
     from arkml.nodes.actransformer import ActPolicyNode
-    return ActPolicyNode(model_cfg=cfg.algo.model, device=str(device))
+
+    return ActPolicyNode

@@ -5,10 +5,10 @@ model:
   joint_dim: 9
   action_dim: 8
   obs_horizon: 1
-  checkpoint: "/nfs/rlteam2/abhineet/dsagent/agent/model_checkpoints_act_run3/epoch_0001.pt"
+  checkpoint: ""
   stepper_frequency: 5
-  global_config: "/nfs/rlteam2/abhineet/dsagent/agent/ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml"
-  policy_node_name: Policy
+  global_config: ""
+
 
 
 trainer:
