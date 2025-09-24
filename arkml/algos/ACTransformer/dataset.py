@@ -18,13 +18,13 @@ tfm = T.Compose(
 def _split_state(state: Any) -> Tuple[torch.Tensor, Any]:
     if not hasattr(state, "__getitem__"):
         raise TypeError(f"state must be indexable, got {type(state)}")
-    if len(state) < 11:
-        raise ValueError(
-            f"state must have at least 11 items (10-dim + image), got {len(state)}"
-        )
-    s_vec = state[:10]
+    # if len(state) < 11:
+    #     raise ValueError(
+    #         f"state must have at least 11 items (10-dim + image), got {len(state)}"
+    #     )
+    s_vec = state[6]
     s_t = torch.as_tensor(s_vec, dtype=torch.float32)
-    img = tfm(state[10])
+    img = tfm(state[9])
     return s_t, img
 
 
@@ -67,16 +67,19 @@ class ActionChunkingArkDataset(Dataset):
         chunk_size: int = 100,
     ):
         self.transform = transform
-        super().__init__(dataset_path=dataset_path)
+        super().__init__()
         self.chunk_size = int(chunk_size)
         self.cache_size = 5
+        self.dataset_path=dataset_path
 
         if files is None:
             self.files: List[str] = sorted(
-                glob.glob(os.path.join(self.dataset_path, "*.pkl"))
+                glob.glob(f"{self.dataset_path}/*.pkl")
             )
         else:
             self.files = sorted(files)
+
+       # self.files = self.files[50:150]
 
         if not self.files:
             raise FileNotFoundError(
@@ -141,7 +144,7 @@ class ActionChunkingArkDataset(Dataset):
 
         # Pre-allocate tensors (float32 for compatibility with most models)
         actions = torch.zeros((K, 8), dtype=torch.float32)
-        mask = torch.zeros((K,), dtype=torch.float32)
+        mask = torch.zeros((K,), dtype=torch.float32 )
 
         for k in range(valid_len):
             row = traj[t0 + k]
@@ -149,16 +152,14 @@ class ActionChunkingArkDataset(Dataset):
             mask[k] = 1.0
 
         # next state/image taken from the final step of the chunk (or end of traj)
-        end_idx = min(t0 + K, L - 1)
-        s_next, img_next = _split_state(traj[end_idx]["next_state"])
+        #end_idx = min(t0 + K, L - 1)
+        #s_next, img_next = _split_state(traj[end_idx]["next_state"])
 
         return {
             "state": s_t,  # (10,)
             "image": img_t,  # original image object
             "action_chunk": actions,  # (K, 8)
             "action_mask": mask,  # (K,)
-            "next_state": s_next,  # (10,)
-            "next_image": img_next,  # original image object
             "meta": {
                 "path": path,
                 "t0": t0,

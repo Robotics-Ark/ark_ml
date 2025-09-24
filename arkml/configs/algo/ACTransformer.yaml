@@ -2,21 +2,21 @@ name: action_chunking_transformer
 model:
   type: ACTransformer
   name: ACTransformer
-  joint_dim: 10
+  joint_dim: 9
   action_dim: 8
   obs_horizon: 1
-  checkpoint: "/Users/abhineetkumar/arkprojects/act-training/best1.pt"
+  checkpoint: "/nfs/rlteam2/abhineet/dsagent/agent/model_checkpoints_act_run3/epoch_0001.pt"
   stepper_frequency: 5
-  global_config: "/Users/abhineetkumar/actml/ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml"
+  global_config: "/nfs/rlteam2/abhineet/dsagent/agent/ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml"
   policy_node_name: Policy
 
 
 trainer:
   seed: 42
-  chunk_size: 50
-  batch_size: 2
+  chunk_size: 100
+  batch_size: 256
   epochs: 10
-  lr: 1e-5
+  lr: 4e-5
   weight_decay: 0.0
   grad_clip: 1.0
   beta: 10.0

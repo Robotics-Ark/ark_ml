@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 from arkml.core.policy import BasePolicy
 from arkml.core.registry import MODELS
+from arkml.utils.utils import print_trainable_summary
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.policies.normalize import Normalize, Unnormalize
 from lerobot.policies.pi0.modeling_pi0 import PI0Policy
@@ -51,7 +52,7 @@ class PiZeroNet(BasePolicy):
 
         self._policy = policy_class.from_pretrained(model_path)
 
-        self._policy.config.n_action_steps = pred_horizon
+        self._policy.config.n_action_steps = 1  # pred_horizon TODO
         self._load_input_output_features()
 
     def to_device(self, device: str) -> Any:
@@ -164,6 +165,7 @@ class PiZeroNet(BasePolicy):
         Returns:
             List of parameters to optimize.
         """
+        print_trainable_summary(self._policy)
         params = [p for p in self._policy.parameters()]
         return params
 

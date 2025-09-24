@@ -3,9 +3,11 @@ from typing import Any
 
 import numpy as np
 import torch
-from arkml.algos.vla.pizero.models import PiZeroNet
+from ark.utils.utils import ConfigPath
 from arkml.algos.vla.pizero.config_utils import resolve_visual_feature_names
+from arkml.algos.vla.pizero.models import PiZeroNet
 from arkml.core.policy_node import PolicyNode
+from arktypes import string_t
 
 
 class PiZeroPolicyNode(PolicyNode):
@@ -33,6 +35,17 @@ class PiZeroPolicyNode(PolicyNode):
             global_config=cfg.global_config,
         )
 
+        self.config = ConfigPath(cfg.global_config).read_yaml()
+        channel_name = self.config.get("channel", "user_input")
+
+        self.mode = self.config.get("mode")
+        self.text_input = None
+
+        # Subscribe the requested channel
+        self.sub = self.create_subscriber(
+            channel_name, string_t, self._callback_text_input
+        )
+
         self.policy.to_device(device)
         self.policy.reset()
         self.policy.set_eval_mode()
@@ -42,6 +55,11 @@ class PiZeroPolicyNode(PolicyNode):
 
     def _on_reset(self):
         self._action_queue.clear()
+
+    def _callback_text_input(
+        self, channel_name: str, received_time: str, msg: string_t
+    ):
+        self.text_input = msg.data
 
     def prepare_observation(self, ob: dict[str, Any]):
         """Convert a single raw env observation into a batched policy input.
@@ -60,7 +78,9 @@ class PiZeroPolicyNode(PolicyNode):
             - ``state``: ``torch.FloatTensor`` of shape ``[1, D]`` if present.
             - ``task``: ``list[str]`` of length 1.
         """
-        obs: dict[str, Any] = {"task": [ob.get("prompt")]}
+        if self.text_input is None:
+            raise ValueError("Prompt input is empty")
+        obs: dict[str, Any] = {"task": [self.text_input]}
 
         # State: accept numpy array or tensor, ensure [1, D] float32
         state_value = ob.get("state")

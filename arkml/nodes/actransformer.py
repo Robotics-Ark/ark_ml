@@ -50,7 +50,7 @@ class ActPolicyNode(PolicyNode):
         Returns `actions_to_exec` from predict()
         """
         policy = ACT(
-            joint_dim=10,
+            joint_dim=9,
             action_dim=8,
             z_dim=32,
             d_model=512,
@@ -66,14 +66,11 @@ class ActPolicyNode(PolicyNode):
             policy=policy,
             device=device,
             policy_name=model_cfg.policy_node_name,
-            observation_unpacking=observation_unpacking,
-            action_packing=action_packing,
-            stepper_frequency=model_cfg.stepper_frequency,
             global_config=model_cfg.global_config,
         )
         CKPT_PATH = model_cfg.checkpoint
         ckpt = torch.load(CKPT_PATH, map_location=device)
-        policy.load_state_dict(ckpt["model"])
+        policy.load_state_dict(ckpt["model_state_dict"])
         self.stepper_frequency = model_cfg.stepper_frequency
 
         self.chunk_size = int(chunk_size)
@@ -118,7 +115,8 @@ class ActPolicyNode(PolicyNode):
             - ``task``: ``list[str]`` of length 1.
         """
         # ---- Image ----
-        img = torch.from_numpy(ob["images"][0].copy()).permute(2, 0, 1)  # (C, H, W)
+
+        img = torch.from_numpy(ob["image_top"].copy()).permute(2, 0, 1)  # (C, H, W)
         img = img.float().div(255.0).unsqueeze(0)  # (1, C, H, W)
 
         # ---- State ----
@@ -146,6 +144,7 @@ class ActPolicyNode(PolicyNode):
 
         memory = self.policy.build_memory(img_t, j_t, z_zero)  # (1, N_ctx, d)
         pred = self.policy.decode_actions(memory, K)  # (1,K,action_dim)
+        print(pred, flush=True)
         return pred.squeeze(0).cpu().numpy()  # (K,action_dim)
 
     @torch.no_grad()

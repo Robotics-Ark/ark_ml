@@ -1,6 +1,9 @@
 import ast
 import importlib
+import os
 from typing import Any
+
+from torch import nn
 
 
 def _normalise_shape(shape_dim: str) -> tuple:
@@ -44,3 +47,40 @@ def _resolve_channel_types(mapping: dict[str, Any]) -> dict[str, type]:
         else:
             resolved[ch_name] = t
     return resolved
+
+
+def print_trainable_summary(model: nn.Module) -> None:
+    """
+    Print a detailed summary of a model’s parameters.
+    Args:
+        model: A PyTorch model.
+
+    Returns:
+        None
+
+    """
+    total_params = 0
+    trainable_params = 0
+    is_debug = os.getenv("DEBUG", False) in ["True", "true", "1"]
+
+    print("\n=== Trainable Parameters Summary ===")
+    for name, param in model.named_parameters():
+        num_params = param.numel()
+        total_params += num_params
+        if param.requires_grad:
+            trainable_params += num_params
+            if is_debug:
+                print(
+                    f"[TRAINABLE] {name:50} | shape={tuple(param.shape)} | params={num_params:,}"
+                )
+        else:
+            if is_debug:
+                print(
+                    f"[frozen   ] {name:50} | shape={tuple(param.shape)} | params={num_params:,}"
+                )
+
+    print("\n--- Totals ---")
+    print(f"Total parameters:     {total_params:,}")
+    print(f"Trainable parameters: {trainable_params:,}")
+    print(f"Frozen parameters:    {total_params - trainable_params:,}")
+    print("==============================\n")

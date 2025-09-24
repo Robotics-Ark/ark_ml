@@ -34,7 +34,7 @@ class PiZeroAlgorithm(BaseAlgorithm):
 
     def __init__(self, policy: BasePolicy, device: str, cfg: DictConfig) -> None:
         super().__init__()
-        self.model = policy.to_device(device)
+        self.model = policy
         self.device = device
         self.cfg = cfg
 
