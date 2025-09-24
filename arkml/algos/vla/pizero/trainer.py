@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 import torch
 from contextlib import nullcontext
@@ -85,7 +85,7 @@ class PiZeroTrainer(Trainer):
         self.model.set_train_mode()
         global_steps = 0
         best_metric = float("inf")
-        best_ckpt_path: Optional[str] = None
+        best_ckpt_path: str | None = None
 
         date_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         ckpt_dir = os.path.join(self.output_dir, date_str)

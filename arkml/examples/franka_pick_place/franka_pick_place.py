@@ -1,5 +1,4 @@
 import argparse
-import json
 import time
 from pathlib import Path
 from typing import Any
@@ -7,7 +6,7 @@ from typing import Any
 import numpy as np
 from ark.env.ark_env import ArkEnv
 from ark.tools.log import log
-from ark.utils.utils import load_yaml
+from ark.utils.utils import ConfigPath
 from arktypes import flag_t, string_t
 from arktypes import (
     task_space_command_t,
@@ -48,13 +47,9 @@ class RobotNode(ArkEnv):
         )
 
         self.max_steps = max_steps
-        self.config = load_yaml(config_path)
-        channel_name = self.config.get("channel", "user_input")
+        self.config = ConfigPath(config_path).read_yaml()
+        self.mode = self.config.get("policy_mode")
 
-        # Subscribe the requested channel
-        self.sub = self.create_subscriber(
-            channel_name, string_t, self._callback_text_input
-        )
 
     @staticmethod
     def action_packing(action):
@@ -145,10 +140,113 @@ class RobotNode(ArkEnv):
         # Give subsystems a moment to settle
         time.sleep(1.0)
 
-    def _callback_text_input(
-        self, channel_name: str, received_time: str, msg: string_t
-    ):
-        self.text_input = msg.data
+
+def stepper_based_episode(
+    robo_env: RobotNode,
+    n_episodes: int,
+    max_step: int,
+    policy_node: str,
+    step_sleep: int,
+):
+    success_count = 0
+    failure_count = 0
+
+    for ep in tqdm(range(n_episodes), desc="Episodes", unit="ep"):
+        robo_env.reset_scene()
+        success = False
+        time.sleep(5)
+        robo_env.observation_space.wait_until_observation_space_is_ready()
+        robo_env.send_service_request(
+            service_name=f"{policy_node}/policy/start",
+            request=flag_t(),
+            response_type=flag_t,
+        )
+        for step_count in tqdm(
+            range(max_step), desc=f"Ep {ep}", unit="step", leave=False
+        ):
+            obs = robo_env.observation_space.get_observation()
+            if obs is None:
+                print("none")
+                continue
+
+            terminated, truncated, info = robo_env.terminated_truncated_info(
+                obs, None, None
+            )
+
+            if terminated or truncated:
+                success = True
+                break
+
+            step_count += 1
+            time.sleep(step_sleep)
+            if terminated or truncated:
+                success = True
+                break
+
+            step_count += 1
+            time.sleep(step_sleep)
+
+        robo_env.send_service_request(
+            service_name=f"{policy_node}/policy/stop",
+            request=flag_t(),
+            response_type=flag_t,
+        )
+        if success:
+            success_count += 1
+            print("EPISODE SUCCESS")
+        else:
+            failure_count += 1
+            print("EPISODE FAILED")
+
+    return success_count, failure_count
+
+
+def service_based_episode(
+    robo_env: RobotNode,
+    n_episodes: int,
+    max_step: int,
+    policy_node: str,
+    step_sleep: int,
+):
+    success_count = 0
+    failure_count = 0
+
+    for ep in tqdm(range(n_episodes), desc="Episodes", unit="ep"):
+        robo_env.reset_scene()
+        success = False
+        time.sleep(5)
+        robo_env.observation_space.wait_until_observation_space_is_ready()
+        for step_count in tqdm(
+            range(max_step), desc=f"Ep {ep}", unit="step", leave=False
+        ):
+            robo_env.send_service_request(
+                service_name=f"{policy_node}/policy/predict",
+                request=flag_t(),
+                response_type=flag_t,
+            )
+
+            obs = robo_env.observation_space.get_observation()
+            if obs is None:
+                continue
+            terminated, truncated, info = robo_env.terminated_truncated_info(
+                obs, None, None
+            )
+
+            if terminated or truncated:
+                success = True
+                break
+
+            step_count += 1
+            time.sleep(step_sleep)
+
+        if success:
+            success_count += 1
+            print("EPISODE SUCCESS")
+        else:
+            failure_count += 1
+            print("EPISODE FAILED")
+
+    return success_count, failure_count
 
 
 def parse_args() -> argparse.Namespace:
@@ -165,7 +263,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--step_sleep",
         type=float,
-        default=0.1,
+        default=1,
         help="Sleep time between steps (default: 0.1s)",
     )
     parser.add_argument(
@@ -187,17 +285,12 @@ def parse_args() -> argparse.Namespace:
         help="Policy node name",
     )
     parser.add_argument(
-        "--prompt_required",
-        type=bool,
-        default=False,
-        help="Whether a text is required for the policy",
-    )
-    parser.add_argument(
         "--config_path",
         type=str,
         default="ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml",
         help="Global config path",
     )
+
 
     return parser.parse_args()
 
@@ -217,48 +310,27 @@ def main() -> None:
     config_path = args.config_path
 
     robo_env = RobotNode(max_steps=max_step, config_path=config_path)
+    policy_mode = robo_env.mode
+    print(f"Policy Mode : {policy_mode}")
 
-    success_count = 0
-    failure_count = 0
-
-    for ep in tqdm(range(n_episodes), desc="Episodes", unit="ep"):
-        robo_env.reset_scene()
-        success = False
-        time.sleep(5)
-        robo_env.observation_space.wait_until_observation_space_is_ready()
-        for step_count in tqdm(
-            range(max_step), desc=f"Ep {ep}", unit="step", leave=False
-        ):
-            request = string_t()
-            request.data = robo_env.text_input
-            response = robo_env.send_service_request(
-                service_name=f"{policy_node}/policy/predict",
-                request=request,
-                response_type=string_t,
-            )
-            if response is None:
-                continue
-
-            action = np.array(json.loads(response.data), dtype=np.float32)
-
-            if len(action) == 0:
-                continue
-
-            observation, reward, terminated, truncated, info = robo_env.step(action)
-
-            if terminated or truncated:
-                success = True
-                break
-
-            step_count += 1
-            time.sleep(step_sleep)
-
-        if success:
-            success_count += 1
-            print("EPISODE SUCCESS")
-        else:
-            failure_count += 1
-            print("EPISODE FAILED")
+    if policy_mode == "service":
+        success_count, failure_count = service_based_episode(
+            robo_env=robo_env,
+            n_episodes=n_episodes,
+            max_step=max_step,
+            policy_node=policy_node,
+            step_sleep=step_sleep,
+        )
+    elif policy_mode == "stepper":
+        success_count, failure_count = stepper_based_episode(
+            robo_env=robo_env,
+            n_episodes=n_episodes,
+            max_step=max_step,
+            policy_node=policy_node,
+            step_sleep=step_sleep,
+        )
+    else:
+        raise ValueError(f"Unknown policy mode: {policy_mode}")
 
     # After all episodes
     success_rate = success_count / n_episodes * 100

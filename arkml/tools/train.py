@@ -27,10 +27,4 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
-    """
-    # Train a policy
-    HYDRA_FULL_ERROR=1 python -m ark_ml.arkml.tools.train algo=pizero \
-    data=pizero_dataset task_prompt="Pick the yellow cube and place it in the white background area of the table" \
-    data.dataset_path=/path/tp/data/set
-    """
     main()

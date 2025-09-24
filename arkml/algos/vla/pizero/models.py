@@ -52,7 +52,7 @@ class PiZeroNet(BasePolicy):
 
         self._policy = policy_class.from_pretrained(model_path)
 
-        self._policy.config.n_action_steps = pred_horizon
+        self._policy.config.n_action_steps = 1  # pred_horizon TODO
         self._load_input_output_features()
 
     def to_device(self, device: str) -> Any:
