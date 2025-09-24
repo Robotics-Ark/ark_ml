@@ -104,7 +104,6 @@ class PolicyNode(ABC, BaseNode):
             self._stop_service_name, flag_t, flag_t, self._callback_stop_service
         )
 
-
         if self.mode == "stepper":
             self.create_stepper(
                 cfg_dict["simulator"]["node_frequency"], self.step_policy
@@ -166,10 +165,12 @@ class PolicyNode(ABC, BaseNode):
         """Compute the next action from observations."""
         obs = self.observation_space.get_observation()
         if obs is None:
+            log.warning(f"Observation is None")
             return
         action = self.predict(obs)
         log.info(f"[ACTION PREDICTED] : {action}")
         if action is None:
+            log.warning(f"Predicted action is None")
             return
         self.action_space.pack_and_publish(action)
 
