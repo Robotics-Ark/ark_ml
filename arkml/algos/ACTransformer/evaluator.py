@@ -1,9 +1,8 @@
 import torch
 
-# from arkml.algos.ACTransformer.models import masked_l1, kl_loss
 from arkml.core.algorithm import Evaluator
 
-# TODO remove
+
 def masked_l1(pred, target, mask):
     diff = (pred - target).abs()  # (B,K,A)
     m = mask.unsqueeze(-1)
@@ -15,6 +14,7 @@ def masked_l1(pred, target, mask):
 def kl_loss(mu, logvar):
     # KL(q||p), p=N(0,I)
     return -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum(dim=-1)  # (B,)
+
 
 class ACTransformerEvaluator(Evaluator):
     def __init__(self, model, dataloader, device="cpu"):
@@ -35,9 +35,9 @@ class ACTransformerEvaluator(Evaluator):
 
                 pred, mu, logvar = self.model(image, state, target, mask)
                 reconstruction_loss = masked_l1(pred, target, mask)
-                kl= kl_loss(mu, logvar).mean()
+                kl = kl_loss(mu, logvar).mean()
                 loss = reconstruction_loss + kl
                 total_loss += loss.item()
                 n += 1
 
-        return {"CVAE Loss": total_loss / max(1,n)}
+        return {"CVAE Loss": total_loss / max(1, n)}

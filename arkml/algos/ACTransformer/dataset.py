@@ -1,7 +1,6 @@
 import glob
-import os
 import pickle
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any, Optional
 
 import torch
 from torchvision import transforms as T
@@ -15,13 +14,9 @@ tfm = T.Compose(
 )
 
 
-def _split_state(state: Any) -> Tuple[torch.Tensor, Any]:
+def _split_state(state: Any) -> tuple[torch.Tensor, Any]:
     if not hasattr(state, "__getitem__"):
         raise TypeError(f"state must be indexable, got {type(state)}")
-    # if len(state) < 11:
-    #     raise ValueError(
-    #         f"state must have at least 11 items (10-dim + image), got {len(state)}"
-    #     )
     s_vec = state[6]
     s_t = torch.as_tensor(s_vec, dtype=torch.float32)
     img = tfm(state[9])
@@ -62,7 +57,7 @@ class ActionChunkingArkDataset(Dataset):
     def __init__(
         self,
         dataset_path: str,
-        files: Optional[List[str]] = None,
+        files: Optional[list[str]] = None,
         transform: T.Compose = None,
         chunk_size: int = 100,
     ):
@@ -73,7 +68,7 @@ class ActionChunkingArkDataset(Dataset):
         self.dataset_path=dataset_path
 
         if files is None:
-            self.files: List[str] = sorted(
+            self.files: list[str] = sorted(
                 glob.glob(f"{self.dataset_path}/*.pkl")
             )
         else:
@@ -87,15 +82,15 @@ class ActionChunkingArkDataset(Dataset):
             )
 
         # Simple LRU cache for trajectories
-        self._cache: Dict[str, List[dict]] = {}
+        self._cache: dict[str, list[dict]] = {}
         self._cache_order: List[str] = []
 
         # Lightweight index: list of (path, t0, traj_len)
-        self._index: List[Tuple[str, int, int]] = []
+        self._index: list[tuple[str, int, int]] = []
         self._build_index_map()
 
     # -------- Internal helpers --------
-    def _get_traj(self, path: str) -> List[dict]:
+    def _get_traj(self, path: str) -> list[dict]:
         """Load (or fetch from cache) a trajectory list of dicts from disk."""
         if path in self._cache:
             # Refresh LRU
@@ -132,7 +127,7 @@ class ActionChunkingArkDataset(Dataset):
     def __len__(self) -> int:
         return len(self._index)
 
-    def __getitem__(self, idx: int) -> Dict[str, Any]:
+    def __getitem__(self, idx: int) -> dict[str, Any]:
         path, t0, L = self._index[idx]
         traj = self._get_traj(path)
 

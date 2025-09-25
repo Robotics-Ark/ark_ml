@@ -11,7 +11,7 @@ from torchvision import transforms
 
 from .dataset import ActionChunkingArkDataset
 
-@ALGOS.register("action_chunking_transformer")
+@ALGOS.register("act")
 class ACTalgorithm(BaseAlgorithm):
     def __init__(self, policy, device: str, cfg: DictConfig):
         super().__init__()

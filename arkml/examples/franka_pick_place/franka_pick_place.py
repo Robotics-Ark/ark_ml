@@ -263,7 +263,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--step_sleep",
         type=float,
-        default=1,
+        default=0.5,
         help="Sleep time between steps (default: 0.1s)",
     )
     parser.add_argument(
@@ -287,7 +287,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--config_path",
         type=str,
-        default="/nfs/rlteam2/abhineet/dsagent/agent/ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml",
+        default="ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml",
         help="Global config path",
     )
 

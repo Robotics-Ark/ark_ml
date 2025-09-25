@@ -49,10 +49,10 @@ class ActPolicyNode(PolicyNode):
         """
         Returns `actions_to_exec` from predict()
         """
-
+        model_cfg = cfg.algo.model
         policy = ACT(
-            joint_dim=9,
-            action_dim=8,
+            joint_dim=model_cfg.joint_dim,
+            action_dim=model_cfg.action_dim,
             z_dim=32,
             d_model=512,
             ffn_dim=3200,
@@ -69,7 +69,7 @@ class ActPolicyNode(PolicyNode):
             policy_name=cfg.node_name,
             global_config=cfg.global_config,
         )
-        model_cfg = cfg.algo.model
+
         CKPT_PATH = model_cfg.checkpoint
         ckpt = torch.load(CKPT_PATH, map_location=device)
         policy.load_state_dict(ckpt["model_state_dict"])
@@ -89,11 +89,6 @@ class ActPolicyNode(PolicyNode):
         )
 
         self.ensembler = TemporalEnsembler(self.chunk_size, self.action_dim)
-
-    # def reset(self):
-    #     """Call at the start of an episode"""
-    #     self.ensembler.sum_buf[:] = 0.0
-    #     self.ensembler.cnt_buf[:] = 0.0
 
     def _on_reset(self):
         """Clear any prefetched actions when an episode ends."""

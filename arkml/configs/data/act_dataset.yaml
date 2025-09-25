@@ -1,2 +1,2 @@
 name: act_dataset
-dataset_path: /nfs/rlteam2/refi/ark/ark_diffusion_policies_on_franka/diffusion_policy/data_collection/trajectories/
+dataset_path:

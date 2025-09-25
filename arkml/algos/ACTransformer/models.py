@@ -95,7 +95,7 @@ class ResNet18Tokens(nn.Module):
         return tokens  # (B, hw, d_model)
 
 
-@MODELS.register("ACTransformer")
+@MODELS.register("act")
 class ACT(BasePolicy):
 
     def __init__(

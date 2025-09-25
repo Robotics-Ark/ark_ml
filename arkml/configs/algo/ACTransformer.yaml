@@ -1,7 +1,7 @@
 name: action_chunking_transformer
 model:
-  type: ACTransformer
-  name: ACTransformer
+  type: act
+  name: act
   joint_dim: 9
   action_dim: 8
   obs_horizon: 1
