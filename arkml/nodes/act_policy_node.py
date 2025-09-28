@@ -75,9 +75,9 @@ class ActPolicyNode(PolicyNode):
         policy.load_state_dict(ckpt["model_state_dict"])
         self.stepper_frequency = model_cfg.stepper_frequency
 
-        self.chunk_size = int(chunk_size)
-        self.action_stride = int(action_stride)
-        self.image_size = int(image_size)
+        self.chunk_size = int(model_cfg.chunk_size)
+        self.action_stride = int(model_cfg.action_stride)
+        self.image_size = int(model_cfg.image_size)
         self.action_dim = int(model_cfg.action_dim)
         self.device = device
 

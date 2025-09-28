@@ -24,7 +24,7 @@ class ACTalgorithm(BaseAlgorithm):
             transforms.Resize((256, 256)),
         ])
 
-        chunk_size = cfg.algo.trainer.chunk_size
+        chunk_size = cfg.algo.model.chunk_size
       
         dataset = ActionChunkingArkDataset(
             dataset_path=cfg.data.dataset_path,

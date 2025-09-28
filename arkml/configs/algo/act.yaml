@@ -19,12 +19,14 @@ model:
   amp: True
   z_dim: 32
   max_len: 100
+  chunk_size: 100
+  action_stride: 1
+
 
 
 
 trainer:
   seed: 42
-  chunk_size: 100
   batch_size: 256
   epochs: 10
   lr: 4e-5
