@@ -15,6 +15,25 @@ tfm = T.Compose(
 
 
 def _split_state(state: Any) -> tuple[torch.Tensor, Any]:
+    """Extract (state_vector, image_tensor) from a raw state record.
+
+
+    Expects an indexable ``state`` where the joint/state vector is at index 6 and
+    the image-like object is at index 9.
+
+
+    Args:
+    state: Indexable record (e.g., list/tuple) holding sensors and image.
+
+
+    Returns:
+    Tuple[torch.Tensor, torch.Tensor]: ``(state_vec, image_tensor)``.
+
+
+    Raises:
+    TypeError: If ``state`` is not indexable.
+    """
+
     if not hasattr(state, "__getitem__"):
         raise TypeError(f"state must be indexable, got {type(state)}")
     s_vec = state[6]
@@ -24,6 +43,19 @@ def _split_state(state: Any) -> tuple[torch.Tensor, Any]:
 
 
 def _to_action_tensor(action: Any) -> torch.Tensor:
+    """Convert an action to a 1D float32 tensor of length 8.
+
+    Args:
+    action: Array-like action.
+
+
+    Returns:
+    torch.Tensor: Shape ``(8,)``.
+
+
+    Raises:
+    ValueError: If action does not have exactly 8 elements.
+    """
     a = torch.as_tensor(action, dtype=torch.float32)
     if a.numel() != 8:
         raise ValueError(
@@ -128,6 +160,24 @@ class ActionChunkingArkDataset(Dataset):
         return len(self._index)
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
+        """
+        Parameters
+        ----------
+        idx : int
+        Dataset index.
+
+
+        Returns
+        -------
+        dict
+        Dictionary with keys:
+        - ``state`` (torch.Tensor): state vector.
+        - ``image`` (torch.Tensor): associated image tensor.
+        - ``action_chunk`` (torch.Tensor): action sequence of shape (K, 8).
+        - ``action_mask`` (torch.Tensor): mask of shape (K,) with 1 for valid steps.
+        - ``meta`` (dict): metadata including file path, start index, trajectory length,
+        and effective chunk length.
+        """
         path, t0, L = self._index[idx]
         traj = self._get_traj(path)
 
@@ -145,10 +195,6 @@ class ActionChunkingArkDataset(Dataset):
             row = traj[t0 + k]
             actions[k] = _to_action_tensor(row["action"])
             mask[k] = 1.0
-
-        # next state/image taken from the final step of the chunk (or end of traj)
-        #end_idx = min(t0 + K, L - 1)
-        #s_next, img_next = _split_state(traj[end_idx]["next_state"])
 
         return {
             "state": s_t,  # (10,)

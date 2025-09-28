@@ -177,6 +177,10 @@ class ACT(BasePolicy):
         self._init_weights()
 
     def _init_weights(self):
+        """Initialize module parameters
+        * Linear layers: truncated normal for weights (std=0.02), zeros for bias.
+        * Conv2d: Kaiming normal for weights (ReLU nonlinearity), zeros for bias.
+        """
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 nn.init.trunc_normal_(m.weight, std=0.02)
@@ -188,9 +192,44 @@ class ACT(BasePolicy):
                     nn.init.zeros_(m.bias)
 
     def _fixed_time_pe(self, K, device, dtype):
+        """Create fixed sinusoidal positional encodings for K time steps.
+
+        Args:
+        K (int): Target sequence length (number of time steps).
+        device (torch.device | str): Target device for the returned tensor.
+        dtype (torch.dtype): Desired dtype for the returned tensor.
+
+
+        Returns:
+        torch.Tensor: Positional encodings of shape ``(K, d_model)``.
+        """
         return sinusoid_1d(K, self.d_model, device, dtype)
 
     def infer_posterior(self, action_seq, joints, mask):
+        """Compute the CVAE approximate posterior ``q(z | a, joints)``.
+
+
+        The action sequence is embedded with fixed sinusoidal time encodings and
+        concatenated with an embedded joint token. A Transformer encoder produces
+        a sequence representation whose first token ("CLS") summarizes the input.
+        That representation is projected to the mean and log-variance of a
+        diagonal Gaussian, and a reparameterized sample :math:`z` is drawn.
+
+
+        Args:
+        action_seq (torch.Tensor): Action sequence of shape ``(B, K, A)``.
+        joints (torch.Tensor): Joint/state vector of shape ``(B, J)`` or
+        ``(B, 1, J)``.
+        mask (torch.Tensor): Float key-padding mask of shape ``(B, K)`` with
+        values ``1`` for valid/time steps to keep and ``0`` for padded
+        steps.
+
+
+        Returns:
+        Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        ``(mu, logvar, z)`` where each has shape ``(B, z_dim)`` and ``z``
+        is a reparameterized sample.
+        """
 
         B, K, _ = action_seq.shape
         a_tok = self.act_embed(action_seq)  # (B,K,d)
@@ -279,6 +318,17 @@ class ACT(BasePolicy):
         # (B, N, d)
 
     def decode_actions(self, memory, K):
+        """Decode an autoregressive sequence of actions.
+
+
+        Args:
+        memory (torch.Tensor): Encoder memory of shape ``(B, N_ctx, d_model)``.
+        K (int): Number of target action steps to predict.
+
+
+        Returns:
+        torch.Tensor: Predicted action sequence of shape ``(B, K, A)``.
+        """
         B = memory.size(0)
         #steps = torch.arange(K, device=memory.device).unsqueeze(0).expand(B, K)
         steps_pe = self._fixed_time_pe(K, memory.device, memory.dtype).unsqueeze(0).expand(B, K, -1)

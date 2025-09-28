@@ -87,7 +87,10 @@ class ACTransformerTrainer(Trainer):
         }
 
     def _save_checkpoint(self, epoch: int, train_loss: float, is_best: bool):
-        # save every epoch
+        """Save epoch checkpoint and update best.pt / last.pt links.
+        Returns:
+        str: Path to the just-saved epoch checkpoint.
+        """
         epoch_path = os.path.join(self.ckpt_dir, f"epoch_{epoch:04d}.pt")
         torch.save(self._checkpoint_payload(epoch, train_loss), epoch_path)
 
@@ -104,6 +107,7 @@ class ACTransformerTrainer(Trainer):
         return epoch_path
 
     def fit(self):
+        """Train the model for the configured number of epochs."""
         self.model.train()
         for epoch in tqdm(range(1, self.epochs + 1), desc="Epochs"):
             epoch_loss = 0.0

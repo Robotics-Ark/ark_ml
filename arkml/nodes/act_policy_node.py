@@ -53,14 +53,14 @@ class ActPolicyNode(PolicyNode):
         policy = ACT(
             joint_dim=model_cfg.joint_dim,
             action_dim=model_cfg.action_dim,
-            z_dim=32,
-            d_model=512,
-            ffn_dim=3200,
-            nhead=8,
-            enc_layers=4,
-            dec_layers=7,
-            dropout=0.1,
-            max_len=50,
+            z_dim=model_cfg.z_dim,
+            d_model=model_cfg.d_model,
+            ffn_dim=model_cfg.ffn_dim,
+            nhead=model_cfg.nhead,
+            enc_layers=model_cfg.enc_layers,
+            dec_layers=model_cfg.dec_layers,
+            dropout=model_cfg.dropout,
+            max_len=model_cfg.max_len,
         )
 
         super().__init__(

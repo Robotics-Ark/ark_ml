@@ -70,9 +70,9 @@ def _build_pizero():
 
     return PiZeroPolicyNode
 
-@register_policy("action_chunking_transformer")
-def _build_ACTransformer():
-    """Build and return ACTransformer"""
+@register_policy("act")
+def _build_ACT():
+    """Build and return ACT"""
     from arkml.nodes.act_policy_node import ActPolicyNode
 
     return ActPolicyNode

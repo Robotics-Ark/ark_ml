@@ -16,11 +16,6 @@ class ACTalgorithm(BaseAlgorithm):
     def __init__(self, policy, device: str, cfg: DictConfig):
         super().__init__()
         self.policy = policy.to(device=device)
-
-        # training a model from the checkpoint
-        CKPT_PATH = "/nfs/rlteam2/abhineet/dsagent/agent/model_checkpoints_act_run2/epoch_0001.pt"
-        ckpt = torch.load(CKPT_PATH, map_location=device)
-        policy.load_state_dict(ckpt["model_state_dict"])
         self.device = device
         self.cfg = cfg
 

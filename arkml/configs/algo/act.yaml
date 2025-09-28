@@ -1,4 +1,4 @@
-name: action_chunking_transformer
+name: act
 model:
   type: act
   name: act
@@ -8,6 +8,17 @@ model:
   checkpoint: ""
   stepper_frequency: 5
   global_config: ""
+  d_model: 512
+  ffn_dim: 3200
+  nhead: 8
+  enc_layers: 4
+  dec_layers: 7
+  dropout: 0.1
+  num_workers: 4
+  image_size: 256
+  amp: True
+  z_dim: 32
+  max_len: 100
 
 
 
@@ -20,12 +31,3 @@ trainer:
   weight_decay: 0.0
   grad_clip: 1.0
   beta: 10.0
-  d_model: 512
-  ffn_dim: 3200
-  nhead: 8
-  enc_layer: 8
-  dec_layers: 7
-  dropout: 0.1
-  num_workers: 4
-  image_size: 256
-  amp: True

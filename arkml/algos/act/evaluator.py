@@ -24,6 +24,11 @@ class ACTransformerEvaluator(Evaluator):
         self.model.eval()
 
     def evaluate(self):
+        """Run evaluation loop.
+
+        Returns:
+        dict: Dictionary with key ``"CVAE Loss"`` containing mean loss.
+        """
         total_loss = 0.0
         n = 0
         with torch.no_grad():
