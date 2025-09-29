@@ -12,10 +12,14 @@ requires-python = ">=3.10"
 dependencies = [
     "hydra-core",
     "torch",
-    "diffusers",
+    "torchvision",
+    "tqdm",
+    "lerobot",
+    "transformers",
+    "pytest",
 ]
 
 [project.scripts]
 arkml-train = "arkml.tools.train:main"
-arkml-rollout = "arkml.tools.policy_service:main"
+arkml-policy = "arkml.tools.policy_service:main"
 

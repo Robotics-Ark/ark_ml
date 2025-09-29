@@ -3,7 +3,7 @@
 Machine learning backbone for the Ark Robotics Framework, providing core models, algorithms, and tools to enable
 intelligent perception, decision-making, and control in robotic applications.
 
-## 📦 Installation
+## Installation
 
 ### 1. Set up environment
 
@@ -40,9 +40,8 @@ pip install -e ark_types
 Use the trained model for rollouts:
 
 ```bash
-HYDRA_FULL_ERROR=1 arkml-rollout algo=<ml_algorithm>  \
+HYDRA_FULL_ERROR=1 arkml-policy algo=<ml_algorithm>  \
   algo.model.model_path=path/to/the/model \
-  algo.model.task_prompt=task_prompt
 ```
 ### Policy services available
 ### Start Service
@@ -54,9 +53,8 @@ PolicyName/policy/stop
 `PolicyName` can be set through command line by using below command 
 
 ```bash
-HYDRA_FULL_ERROR=1 arkml-rollout algo=<ml_algorithm>  \
+HYDRA_FULL_ERROR=1 arkml-policy algo=<ml_algorithm>  \
   algo.model.model_path=path/to/the/model \
-  algo.model.task_prompt=task_prompt \
   policy_node_name=policy_name
 ```
 
@@ -74,6 +72,13 @@ Reset the policy state
 PolicyName/policy/stop
 ```
 
+### Predict Service
+predict next action
+
+```bash
+PolicyName/policy/predict
+```
+
 ## Client  Service
 A client service can be started using below command
 ```bash
@@ -86,6 +91,7 @@ Train a model with a dataset:
 ```bash
 CUDA_VISIBLE_DEVICES=0 HYDRA_FULL_ERROR=1 \
 arkml.tools.train algo=<ml_algorithm> \
-  task_prompt=task_prompt /path/to/dataset
+ data.dataset_path=/path/to/dataset \
+ output_dir=/output/path
 
 ```

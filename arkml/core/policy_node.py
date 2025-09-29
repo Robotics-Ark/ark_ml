@@ -1,14 +1,14 @@
-import json
 from abc import abstractmethod, ABC
 from typing import Any
 
 import numpy as np
 from ark.client.comm_infrastructure.base_node import BaseNode
-from ark.env.spaces import ObservationSpace
+from ark.env.spaces import ObservationSpace, ActionSpace
 from ark.tools.log import log
 from arkml.utils.schema_io import (
-    get_observation_channel_types,
+    get_channel_types,
     _dynamic_observation_unpacker,
+    _dynamic_action_packer,
 )
 from arkml.utils.schema_io import load_yaml
 from arktypes import flag_t, string_t
@@ -40,9 +40,15 @@ class PolicyNode(ABC, BaseNode):
         if "channel_config" not in cfg_dict:
             raise ValueError("channel_config must not be empty and properly configured")
 
+        self.mode = cfg_dict["policy_mode"]
+        if self.mode not in ["service", "stepper"]:
+            raise ValueError("Policy_mode must be 'service' or 'stepper'")
+
+        log.info(f"Policy mode: {self.mode}")
+
         schema = load_yaml(config_path=cfg_dict["channel_config"])
         # Channel config to get observations
-        obs_channels = get_observation_channel_types(schema=schema)
+        obs_channels = get_channel_types(schema=schema, channel_type="observation")
         self.observation_unpacking = _dynamic_observation_unpacker(schema)
 
         if not obs_channels:
@@ -51,10 +57,15 @@ class PolicyNode(ABC, BaseNode):
         self.observation_space = ObservationSpace(
             obs_channels, self.observation_unpacking, self._lcm
         )
-
         self._multi_comm_handlers.append(
             self.observation_space.observation_space_listener
         )
+
+        action_channels = get_channel_types(schema=schema, channel_type="action")
+        self.action_packing = _dynamic_action_packer(schema)
+        self.action_space = ActionSpace(action_channels, self.action_packing, self._lcm)
+
+        self._multi_comm_handlers.append(self.action_space.action_space_publisher)
 
         # Policy setup
         self.policy = policy
@@ -68,11 +79,14 @@ class PolicyNode(ABC, BaseNode):
         self._predict_service_name = f"{self.name}/policy/predict"
         self._reset_service_name = f"{self.name}/policy/reset"
 
+        self._start_service_name = f"{self.name}/policy/start"
+        self._stop_service_name = f"{self.name}/policy/stop"
+
         # predict
         self.create_service(
             self._predict_service_name,
-            string_t,
-            string_t,
+            flag_t,
+            flag_t,
             self._callback_predict_service,
         )
 
@@ -80,6 +94,20 @@ class PolicyNode(ABC, BaseNode):
         self.create_service(
             self._reset_service_name, flag_t, flag_t, self._callback_reset_service
         )
+
+        # start
+        self.create_service(
+            self._start_service_name, flag_t, flag_t, self._callback_start_service
+        )
+        # stop
+        self.create_service(
+            self._stop_service_name, flag_t, flag_t, self._callback_stop_service
+        )
+
+        if self.mode == "stepper":
+            self.create_stepper(
+                cfg_dict["simulator"]["node_frequency"], self.step_policy
+            )
 
     def reset(self) -> None:
         """Reset the internal state of the policy."""
@@ -113,18 +141,38 @@ class PolicyNode(ABC, BaseNode):
         return reset_status
 
     def _callback_predict_service(self, channel, msg):
-        response = string_t()
-        if self._resetting:
-            response.data = []
-        else:
-            prompt = msg.data
-            obs = self.observation_space.get_observation()
-            obs["prompt"] = prompt
-            action = self.predict(obs)
-            log.info(f"[ACTION PREDICTED] : {action}")
-            response.data = json.dumps(action.tolist())
+        self.get_next_action()
+        return flag_t()
 
-        return response
+    def step_policy(self):
+        if self._stop_service:
+            return
+        self.get_next_action()
+
+    def _callback_start_service(self, channel, msg) -> flag_t:
+        """Start policy prediction service"""
+        log.info(f"[INFO] Received callback to start service")
+        self._stop_service = False
+        return flag_t()
+
+    def _callback_stop_service(self, channel, msg) -> flag_t:
+        """Stop policy prediction service"""
+        log.info(f"[INFO] Received callback to stop service")
+        self._stop_service = True
+        return flag_t()
+
+    def get_next_action(self):
+        """Compute the next action from observations."""
+        obs = self.observation_space.get_observation()
+        if obs is None:
+            log.warning(f"Observation is None")
+            return
+        action = self.predict(obs)
+        log.info(f"[ACTION PREDICTED] : {action}")
+        if action is None:
+            log.warning(f"Predicted action is None")
+            return
+        self.action_space.pack_and_publish(action)
 
     @abstractmethod
     def predict(self, obs_seq: dict[str, Any]) -> np.ndarray:

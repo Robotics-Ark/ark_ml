@@ -19,9 +19,6 @@ class PiZeroDataset(Dataset):
         *args,
         **kwargs,
     ):
-        self.task_prompt = kwargs.pop("task_prompt", None)
-        if self.task_prompt is None:
-            raise ValueError("Missing required keyword 'task_prompt'")
         self.pred_horizon = 1
 
         super().__init__()
@@ -64,7 +61,7 @@ class PiZeroDataset(Dataset):
             traj_list = pickle.load(f)
             trajectory = traj_list[traj_idx]
 
-        sample: dict[str, Any] = {"task": self.task_prompt}
+        sample: dict[str, Any] = {"task": trajectory.get("prompt")}
 
         state_array = np.asarray(
             trajectory["state"][6], dtype=np.float32

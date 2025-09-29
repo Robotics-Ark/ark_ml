@@ -7,7 +7,7 @@ from typing import Any
 import numpy as np
 import yaml
 from arkml.utils.utils import _resolve_channel_types
-from arktypes.utils import unpack
+from arktypes.utils import unpack, pack
 
 FIELD_MAP: dict[str, dict[str, int]] = {
     "joint_state": {
@@ -75,7 +75,7 @@ def get_ark_fn_type(ark_module: unpack, name: str):
     return fn, dtype
 
 
-def get_observation_channel_types(schema: dict) -> dict[str, type]:
+def get_channel_types(schema: dict, channel_type: str) -> dict[str, type]:
     """
     Generate a mapping of observation channel names to Python/Ark types
     based on the observation schema.
@@ -90,7 +90,7 @@ def get_observation_channel_types(schema: dict) -> dict[str, type]:
     """
     channels: dict[str, Any] = {}
 
-    obs_schema = schema.get("observation", {})
+    obs_schema = schema.get(channel_type, {})
 
     for key, entries in obs_schema.items():
         for item in entries:
@@ -172,10 +172,54 @@ def _dynamic_observation_unpacker(schema: dict) -> Callable:
     return _unpack
 
 
+def _dynamic_action_packer(schema: dict) -> Callable[..., dict[str, Any]]:
+    """
+    Create a dynamic action packer from schema.
+
+    Returns a function:
+        _pack(observation_dict) -> dict
+
+    """
+
+    act_schema = schema.get("action", {})
+    entries = act_schema.get("action")
+    if entries is None:
+        raise ValueError("Action schema must define an 'action' entry.")
+
+    def _pack(action: list[float] | np.ndarray) -> dict[str, Any]:
+        a = np.asarray(action).tolist()
+        result: dict[str, Any] = {}
+
+        for item in entries:
+            channel = item["from"]
+            using = item["using"]
+            select = item.get("select", {})
+
+            # resolve packer dynamically
+            fn, dtype = get_ark_fn_type(ark_module=pack, name=using)
+
+            # build args from config
+            args = []
+            for field_name, idx in select.items():
+                if isinstance(idx, list):
+                    args.append(np.array([a[i] for i in idx]))
+                elif isinstance(idx, str):
+                    args.append(idx)
+                else:
+                    args.append(a[idx])
+
+            msg = fn(*args)
+            result[channel] = msg
+
+        return result
+
+    return _pack
+
+
 if __name__ == "__main__":
     global_config_path = (
         "ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml"
     )
     global_schema = load_yaml(config_path=global_config_path)
     channel_schema = load_yaml(config_path=global_schema["channel_config"])
-    obs_channels = get_observation_channel_types(schema=channel_schema)
+    obs_channels = get_channel_types(schema=channel_schema, channel_type="observation")
