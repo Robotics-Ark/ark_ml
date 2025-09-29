@@ -14,27 +14,56 @@ import numpy as np
 from PIL import Image
 
 class TemporalEnsembler:
+    """
+      - Maintain per-index weighted sums (numerator) and weights (denominator).
+      - On each control step:
+          * shift left by `stride`
+          * exponentially decay ALL existing contributions by exp(-coeff * stride)
+          * add the new chunk with unit weight at every relative index
+      - Return the discounted average for the next `stride` steps.
+    Note:
+      sum_buf -> numerator of weighted avg
+      cnt_buf -> denominator (total weight)
+    """
 
-    def __init__(self, K, action_dim):
-        self.K = K
-        self.action_dim = action_dim
-        self.sum_buf = np.zeros((K, action_dim), dtype=np.float32)
-        self.cnt_buf = np.zeros((K,), dtype=np.float32)
+    def __init__(self, K, action_dim, coeff=0.01):
+        self.K = int(K)
+        self.action_dim = int(action_dim)
+        self.coeff = float(coeff)
+
+        # keep original field names for compatibility with your reset()
+        self.sum_buf = np.zeros((self.K, self.action_dim), dtype=np.float32)  # numerator
+        self.cnt_buf = np.zeros((self.K,), dtype=np.float32)                  # denominator (weights)
 
     def step_and_get(self, new_chunk, stride=1):
         K = self.K
-        # Shift left
+        stride = int(stride)
+
+        # 1) shift buffers left by stride
         if stride > 0:
-            self.sum_buf[:-stride] = self.sum_buf[stride:]
-            self.cnt_buf[:-stride] = self.cnt_buf[stride:]
+            if stride < K:
+                self.sum_buf[:-stride] = self.sum_buf[stride:]
+                self.cnt_buf[:-stride] = self.cnt_buf[stride:]
             self.sum_buf[-stride:] = 0.0
             self.cnt_buf[-stride:] = 0.0
 
-        self.sum_buf[:K] += new_chunk
+        # 2) exponential decay of existing contributions by elapsed steps
+        decay = np.exp(-self.coeff * stride).astype(np.float32)
+        self.sum_buf *= decay
+        self.cnt_buf *= decay
+
+        # 3) add the new chunk with unit weight at all visible indices
+        #    (makes the aggregator a discounted average over overlapping chunks)
+        self.sum_buf[:K] += new_chunk[:K]
         self.cnt_buf[:K] += 1.0
 
-        smoothed = self.sum_buf / np.maximum(self.cnt_buf[:, None], 1.0)
+        # 4) form discounted average; safe divide
+        denom = np.maximum(self.cnt_buf[:], 1e-8)[:, None]
+        smoothed = self.sum_buf / denom
+
+        # emit the next `stride` actions
         return smoothed[:stride]
+
 
 
 class ActPolicyNode(PolicyNode):
@@ -42,9 +71,6 @@ class ActPolicyNode(PolicyNode):
         self,
         cfg,
         device="cpu",
-        chunk_size=50,
-        action_stride=8,
-        image_size=256,
     ):
         """
         Returns `actions_to_exec` from predict()
