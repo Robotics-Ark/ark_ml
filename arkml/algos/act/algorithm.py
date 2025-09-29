@@ -1,7 +1,7 @@
 from typing import Any
 import torch
-from arkml.algos.ACTransformer.evaluator import ACTransformerEvaluator
-from arkml.algos.ACTransformer.trainer import ACTransformerTrainer
+from arkml.algos.act.evaluator import ACTransformerEvaluator
+from arkml.algos.act.trainer import ACTransformerTrainer
 from arkml.core.algorithm import BaseAlgorithm
 from arkml.core.registry import ALGOS
 from omegaconf import DictConfig,  OmegaConf

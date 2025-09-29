@@ -5,7 +5,7 @@ from typing_extensions import overload
 from arktypes.utils import pack
 from arktypes import task_space_command_t, string_t
 
-from arkml.algos.ACTransformer.models import ACT
+from arkml.algos.act.models import ACT
 from arkml.core.policy_node import PolicyNode
 from typing import Any
 from arkml.utils.franka_utils import observation_unpacking, action_packing
