@@ -22,8 +22,8 @@ def main(cfg: DictConfig):
     print("Training finished :", history)
 
     # Run Evaluation
-    history = algo.eval()
-    print("Validation finished :", history)
+    # history = algo.eval()
+    # print("Validation finished :", history)
 
 
 if __name__ == "__main__":

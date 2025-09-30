@@ -72,7 +72,7 @@ def _build_pizero():
 
 
 @register_policy("diffusion_policy")
-def _build_diffusion(cfg: DictConfig, device: torch.device):
+def _build_diffusion():
     """Build and return a DiffusionPolicyNode from config.
 
 

@@ -7,9 +7,9 @@ model:
   action_horizon: 8
   diffusion_steps: 100
   action_dim: 8
+  model_path: null
   image_encoder:
     enabled: true
-    key: images
     in_channels: 3
     conv_channels: [64, 128, 256, 256]
     kernel_sizes: [7, 3, 3, 3]
@@ -19,10 +19,7 @@ model:
     dropout: 0.0
     global_pool: true
     proj_dim: 256
-  proprio_encoder:
-    enabled: true
-    key: state
-    in_dim: 10
+  state_encoder:
     hidden_dims: [256, 256]
     output_dim: 256
     activation: gelu
@@ -55,7 +52,7 @@ trainer:
   ema_power: 0.75
   grad_clip: 1.0
   scheduler: cosine
-  batch_size: 256
+  batch_size: 16
   log_every_n_steps: 50
   val_every_n_epochs: 10
-  num_workers: 4
+  num_workers: 0

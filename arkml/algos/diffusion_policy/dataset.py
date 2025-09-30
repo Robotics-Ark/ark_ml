@@ -1,105 +1,124 @@
-import os
+import glob
 import pickle
-from typing import Any
+from pathlib import Path
+from typing import List
 
-import numpy as np
 import torch
-from PIL import Image
+from arkml.utils.utils import _image_to_tensor
 from torch.utils.data import Dataset
 from torchvision import transforms
 
 
-class DiffusionDataset(Dataset):
+class DiffusionPolicyDataset(Dataset):
+
     def __init__(
         self,
-        dataset_path,
-        transform=None,
-        visual_input_features=None,
-        image_base_index: int = 9,
-        *args,
-        **kwargs,
+        dataset_path: str | Path,
+        pred_horizon: int,
+        obs_horizon: int,
+        action_horizon: int,
+        subsample: int = 1,
+        in_memory: bool = True,
     ):
-        self.task_prompt = kwargs.pop("task_prompt", None)
-        if self.task_prompt is None:
-            raise ValueError("Missing required keyword 'task_prompt'")
-        self.pred_horizon = 1
-
         super().__init__()
-        self.dataset_path = dataset_path
-        self.transform = transform or transforms.ToTensor()
-        self.visual_input_features = ["image"]
-        self.image_base_index = image_base_index
+        self.subsample = subsample
 
-        self.index_map = []
-        self._build_index_map()
-
-    """Lazy-loading dataset that adapts to configurable visual inputs."""
-
-    def _build_index_map(self) -> None:
-        if not os.path.exists(self.dataset_path):
-            raise FileNotFoundError(
-                f"Dataset path '{self.dataset_path}' does not exist."
-            )
-
-        file_list = sorted(
+        self.dataset_path = Path(dataset_path)
+        self.pred_horizon = pred_horizon
+        self.obs_horizon = obs_horizon
+        self.action_horizon = action_horizon
+        self.in_memory = in_memory
+        self.transform = transforms.Compose(
             [
-                os.path.join(self.dataset_path, f)
-                for f in os.listdir(self.dataset_path)
-                if f.endswith(".pkl")
+                transforms.Resize((256, 256)),  # force all images to 256x256
             ]
         )
 
-        for fpath in file_list:
-            with open(fpath, "rb") as f:
-                traj_list = pickle.load(f)
-                for idx in range(len(traj_list)):
-                    self.index_map.append((fpath, idx))
+        # ------------------------------------------------------------------
+        # 1. Gather all pickle files
+        # ------------------------------------------------------------------
+        self.trajectories = []
+        self.file_index = sorted(glob.glob(str(self.dataset_path / "*.pkl")))
+        if not self.file_index:
+            raise FileNotFoundError(f"No *.pkl files in {self.dataset_path}")
 
+        self.trajectories = [None] * len(self.file_index)  # placeholder
+
+        # ------------------------------------------------------------------
+        # 3. Build a global index mapping (traj_id, start_step) → sample
+        # ------------------------------------------------------------------
+        # A valid *raw* window must span the following number of env steps:
+        #     span = (obs_horizon + action_horizon + pred_horizon - 1) * subsample + 1
+        span = (
+            self.obs_horizon + self.action_horizon + self.pred_horizon - 1
+        ) * self.subsample + 1
+        self.sample_index = []
+        for tid, traj in enumerate(
+            self._get_traj(i) for i in range(len(self.file_index))
+        ):
+            if len(traj) < span:
+                continue  # trajectory too short for even one window
+            last_valid_start = len(traj) - span
+            self.sample_index.extend([(tid, s) for s in range(last_valid_start + 1)])
+
+        # states: List[np.ndarray] = []
+        # actions: List[np.ndarray] = []
+        # for traj in (self._get_traj(i) for i in range(len(self.file_index))):
+        #     states.extend([row["state"] for row in traj])
+        #     actions.extend([row["action"] for row in traj])
+        # states_np = np.asarray(states, dtype=np.float32)
+        # actions_np = np.asarray(actions, dtype=np.float32)
+
+        # self.stats = {
+        #     "state": {
+        #         "min": torch.from_numpy(states_np.min(axis=0)),
+        #         "max": torch.from_numpy(states_np.max(axis=0)),
+        #     },
+        #     "action": {
+        #         "min": torch.from_numpy(actions_np.min(axis=0)),
+        #         "max": torch.from_numpy(actions_np.max(axis=0)),
+        #     },
+        # }
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+    def _get_traj(self, idx: int) -> List[dict]:
+        """Return trajectory `idx` (load from disk if necessary)."""
+        if self.trajectories[idx] is None:  # lazy‑load
+            with open(self.file_index[idx], "rb") as f:
+                self.trajectories[idx] = pickle.load(f)
+        return self.trajectories[idx]  # type: ignore[return-value]
+
+    # ------------------------------------------------------------------
+    # Dataset protocol
+    # ------------------------------------------------------------------
     def __len__(self) -> int:
-        return len(self.index_map)
+        return len(self.sample_index)
 
-    def __getitem__(self, idx) -> dict[str, Any]:
-        fpath, traj_idx = self.index_map[idx]
-        with open(fpath, "rb") as f:
-            traj_list = pickle.load(f)
-            trajectory = traj_list[traj_idx]
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        traj_id, start = self.sample_index[idx]
+        traj = self._get_traj(traj_id)
+        step = self.subsample
 
-        sample: dict[str, Any] = {"task": self.task_prompt}
+        # Build index lists -------------------------------------------------
+        obs_indices = [start + i * step for i in range(self.obs_horizon)]
+        pred_indices = [
+            start + (self.obs_horizon + i) * step for i in range(self.pred_horizon)
+        ]
 
-        state_array = np.asarray(
-            trajectory["state"][6], dtype=np.float32
-        )  # TODO handle proper index based on data collection pipeline
-        sample["state"] = torch.from_numpy(state_array)
+        obs_seq = torch.tensor(
+            [traj[t]["state"][6] for t in obs_indices], dtype=torch.float32
+        )
 
-        for cam_index, cam_name in enumerate(self.visual_input_features):
-            image_value = trajectory.get(cam_name)
-            if image_value is None:
-                state_block = trajectory.get("state")
-                if state_block is not None:
-                    candidate_idx = self.image_base_index + cam_index
-                    if len(state_block) > candidate_idx:
-                        image_value = state_block[candidate_idx]
-            if image_value is None:
-                raise KeyError(f"Image data for '{cam_name}' not found in trajectory")
-            sample[cam_name] = self._image_to_tensor(image_value)
+        img_tensors = [self.transform(_image_to_tensor(traj[t]["state"][9])) for t in obs_indices]
+        img_seq = torch.stack(img_tensors, dim=0)
+        prediction_actions = torch.tensor(
+            [traj[t]["action"] for t in pred_indices], dtype=torch.float32
+        )
 
-        action_array = np.asarray(trajectory["action"], dtype=np.float32)
-        if action_array.ndim == 1:
-            action_array = action_array[None, :]
-        sample["action"] = torch.from_numpy(action_array)
-
-        return sample
-
-    def _image_to_tensor(self, image_value: Any) -> torch.Tensor:
-        array = np.asarray(image_value)
-        if array.dtype != np.uint8:
-            array_float = array.astype(np.float32)
-            if array_float.max() <= 1.0:
-                array_uint8 = np.clip(array_float * 255.0, 0, 255).astype(np.uint8)
-            else:
-                array_uint8 = np.clip(array_float, 0, 255).astype(np.uint8)
-        else:
-            array_uint8 = array
-
-        image = Image.fromarray(array_uint8)
-        return self.transform(image)
+        return {
+            "state": obs_seq,  # (obs_horizon, state_dim)
+            "image": img_seq,  # (obs_horizon, im_dim)
+            "action": prediction_actions,  # (pred_horizon, action_dim)
+        }

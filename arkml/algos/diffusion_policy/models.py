@@ -1,11 +1,11 @@
-from typing import Any, Optional, Sequence, Union
+from typing import Any
 
 import math
 import torch
 import torch.nn as nn
-
 from arkml.core.policy import BasePolicy
 from arkml.core.registry import MODELS
+from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 
 
 class SinusoidalPosEmb(nn.Module):
@@ -106,7 +106,7 @@ class ConditionalUnet1D(nn.Module):
         input_dim: int,
         global_cond_dim: int,
         diffusion_step_embed_dim: int = 256,
-        down_dims: Optional[Sequence[int]] = None,
+        down_dims: list[int] | None = None,
         kernel_size: int = 5,
         n_groups: int = 8,
     ):
@@ -182,9 +182,15 @@ class ConditionalUnet1D(nn.Module):
     def forward(
         self,
         sample: torch.Tensor,
-        timestep: Union[torch.Tensor, float, int],
-        global_cond: Optional[torch.Tensor] = None,
+        timestep: torch.Tensor,
+        global_cond: torch.Tensor,
     ) -> torch.Tensor:
+        if global_cond is None:
+            raise ValueError(
+                "global_cond must be provided to ConditionalUnet1D forward"
+            )
+
+        seq_len = sample.size(-2) if sample.dim() >= 2 else sample.size(-1)
         x = sample.moveaxis(-1, -2)
         if not torch.is_tensor(timestep):
             timestep = torch.tensor([timestep], dtype=torch.long, device=x.device)
@@ -193,19 +199,17 @@ class ConditionalUnet1D(nn.Module):
         timestep = timestep.to(x.device)
         timestep = timestep.expand(x.size(0))
         time_emb = self.diffusion_step_encoder(timestep)
-        if global_cond is None:
-            raise ValueError(
-                "global_cond must be provided to ConditionalUnet1D forward"
-            )
+
         global_feature = torch.cat([time_emb, global_cond], dim=-1)
 
         h: list[torch.Tensor] = []
         x = self.input_conv(x)
-        for res1, res2, downsample in self.down_modules:
+        for idx, (res1, res2, downsample) in enumerate(self.down_modules):
             x = res1(x, global_feature)
             x = res2(x, global_feature)
-            h.append(x)
             x = downsample(x)
+            if idx < len(self.down_modules) - 1:
+                h.append(x)
 
         for mid in self.mid_modules:
             x = mid(x, global_feature)
@@ -218,17 +222,17 @@ class ConditionalUnet1D(nn.Module):
             x = upsample(x)
 
         # Ensure we have the same temporal length as input
-        if x.size(-1) > sample.size(-1):
-            x = x[..., : sample.size(-1)]
-        elif x.size(-1) < sample.size(-1):
-            pad = sample.size(-1) - x.size(-1)
+        if x.size(-1) > seq_len:
+            x = x[..., :seq_len]
+        elif x.size(-1) < seq_len:
+            pad = seq_len - x.size(-1)
             x = torch.nn.functional.pad(x, (0, pad))
 
         x = self.final_conv(x)
         return x.moveaxis(-1, -2)
 
 
-def _get_activation(name: Optional[str]) -> nn.Module:
+def _get_activation(name: str | None) -> nn.Module:
     if name is None:
         return nn.Identity()
     name = name.lower()
@@ -247,13 +251,17 @@ def _get_activation(name: Optional[str]) -> nn.Module:
     raise ValueError(f"Unsupported activation '{name}'.")
 
 
-def _get_norm(norm_type: Optional[str], num_features: int) -> nn.Module:
+def _get_norm(norm_type: str | None, num_features: int) -> nn.Module:
     if norm_type is None:
         return nn.Identity()
     norm_type = norm_type.lower()
     if norm_type in {"batchnorm", "batch", "bn"}:
         return nn.BatchNorm2d(num_features)
-    if norm_type in {"layernorm", "layer", "ln"}:
+    if norm_type in {
+        "layernorm",
+        "layer",
+        "ln",
+    }:  # TODO check layer norma and Group norm
         return nn.GroupNorm(1, num_features)
     if norm_type in {"groupnorm", "group", "gn"}:
         groups = 32 if num_features % 32 == 0 else 8
@@ -265,8 +273,8 @@ class TimeDistributedMLP(nn.Module):
     def __init__(
         self,
         input_dim: int,
-        hidden_dims: Optional[Sequence[int]] = None,
-        output_dim: Optional[int] = None,
+        hidden_dims: list[int] | None = None,
+        output_dim: int | None = None,
         activation: str = "gelu",
         dropout: float = 0.0,
         use_layer_norm: bool = False,
@@ -299,11 +307,11 @@ class VisualEncoder(nn.Module):
     def __init__(
         self,
         in_channels: int,
-        conv_channels: Sequence[int],
-        kernel_sizes: Union[int, Sequence[int]] = 3,
-        strides: Union[int, Sequence[int]] = 2,
+        conv_channels: list[int],
+        kernel_sizes: int | list[int] = 3,
+        strides: int | list[int] = 2,
         activation: str = "silu",
-        norm: Optional[str] = "layernorm",
+        norm: str = "layernorm",
         dropout: float = 0.0,
         global_pool: bool = True,
     ):
@@ -422,7 +430,7 @@ class MLP(nn.Module):
     def __init__(
         self,
         input_dim: int,
-        hidden_dims: Optional[Sequence[int]] = None,
+        hidden_dims: list[int] = None,
         activation: str = "gelu",
         dropout: float = 0.0,
         use_layer_norm: bool = False,
@@ -457,13 +465,14 @@ class DiffusionPolicyModel(BasePolicy):
         pred_horizon: int,
         diffusion_steps: int,
         image_dim: tuple = (3, 480, 640),
-        state_dim: int = 9, # TODO
+        state_dim: int = 9,  # TODO
         image_encoder: dict | None = None,
-        proprio_encoder: dict | None = None,
+        state_encoder: dict | None = None,
         fusion: dict | None = None,
         condition_head: dict | None = None,
         unet: dict | None = None,
         temporal_pooling: str = "flatten",
+        visual_input_features: list[str] | None = None,
     ):
         super().__init__()
         self.action_dim = action_dim
@@ -475,15 +484,15 @@ class DiffusionPolicyModel(BasePolicy):
         self.temporal_pooling = temporal_pooling.lower()
 
         image_cfg = dict(image_encoder or {})
-        proprio_cfg = dict(proprio_encoder or {})
+        state_cfg = dict(state_encoder or {})
         fusion_cfg = dict(fusion or {})
         condition_cfg = dict(condition_head or {})
         unet_cfg = dict(unet or {})
 
+        self.visual_input_features = visual_input_features
         self.use_images = image_cfg.pop("enabled", True)
-        self.image_key = image_cfg.pop("key", "images")
-        self.use_state = proprio_cfg.pop("enabled", True)
-        self.state_key = proprio_cfg.pop("key", "state")
+
+        self.state_key = "state"
 
         self.image_encoder = None
         self.image_proj = None
@@ -506,7 +515,7 @@ class DiffusionPolicyModel(BasePolicy):
                 dropout=dropout,
                 global_pool=global_pool,
             )
-            proj_dim = image_cfg.pop("proj_dim", None)
+            proj_dim = image_cfg.pop("proj_dim")
             if proj_dim is not None:
                 self.image_proj = nn.Linear(self.image_encoder.output_dim, proj_dim)
                 image_feature_dim = proj_dim
@@ -514,29 +523,22 @@ class DiffusionPolicyModel(BasePolicy):
                 self.image_proj = nn.Identity()
                 image_feature_dim = self.image_encoder.output_dim
 
-        self.state_encoder = None
-        state_feature_dim = 0
-        if self.use_state:
-            hidden_dims = proprio_cfg.pop("hidden_dims", [128, 128])
-            output_dim = proprio_cfg.pop("output_dim", None)
-            activation = proprio_cfg.pop("activation", "gelu")
-            dropout = proprio_cfg.pop("dropout", 0.0)
-            use_layer_norm = proprio_cfg.pop("use_layer_norm", False)
-            self.state_encoder = TimeDistributedMLP(
-                input_dim=self.state_dim,
-                hidden_dims=hidden_dims,
-                output_dim=output_dim,
-                activation=activation,
-                dropout=dropout,
-                use_layer_norm=use_layer_norm,
-            )
-            state_feature_dim = self.state_encoder.output_dim
+        hidden_dims = state_cfg.pop("hidden_dims", [128, 128])
+        output_dim = state_cfg.pop("output_dim")
+        activation = state_cfg.pop("activation", "gelu")
+        dropout = state_cfg.pop("dropout", 0.0)
+        use_layer_norm = state_cfg.pop("use_layer_norm", False)
+        self.state_encoder = TimeDistributedMLP(
+            input_dim=self.state_dim,
+            hidden_dims=hidden_dims,
+            output_dim=output_dim,
+            activation=activation,
+            dropout=dropout,
+            use_layer_norm=use_layer_norm,
+        )
+        state_feature_dim = self.state_encoder.output_dim
 
         per_step_feature_dim = image_feature_dim + state_feature_dim
-        if per_step_feature_dim == 0:
-            raise ValueError(
-                "At least one of image_encoder or proprio_encoder must be enabled."
-            )
 
         fusion_type = fusion_cfg.pop("type", "transformer").lower()
         if fusion_type == "transformer":
@@ -604,52 +606,43 @@ class DiffusionPolicyModel(BasePolicy):
             return per_step_dim
         raise ValueError(f"Unsupported temporal pooling '{self.temporal_pooling}'.")
 
-    def _to_tensor(self, data: Any) -> torch.Tensor:
-        if isinstance(data, torch.Tensor):
-            tensor = data
-        else:
-            tensor = torch.as_tensor(data)
-        tensor = tensor.to(self.device)
-        if tensor.dtype != torch.float32:
-            tensor = tensor.float()
-        return tensor
-
-    def _prepare_image(self, obs_dict: dict[str, Any]) -> Optional[torch.Tensor]:
+    def _prepare_image(self, obs_dict: dict[str, Any]) -> torch.Tensor | None:
         if not self.use_images or self.image_encoder is None:
             return None
-        if self.image_key not in obs_dict:
-            raise KeyError(f"Missing image key '{self.image_key}' in observation.")
-        images = self._to_tensor(obs_dict[self.image_key])
-        if images.dim() == 4:
-            images = images.unsqueeze(0)
+        if self.visual_input_features[0] not in obs_dict:
+            raise KeyError(
+                f"Missing image key '{self.visual_input_features}' in observation."
+            )
+        images = obs_dict[self.visual_input_features[0]].to(self.device)
+        if not isinstance(images, torch.Tensor):
+            raise ValueError(
+                f"Expected image to be of type torch.Tensor, but got {type(images)}."
+            )
+
         if images.dim() != 5:
             raise ValueError(
-                f"Expected images in (B, T, C, H, W) or (B, T, H, W, C) format, got {tuple(images.shape)}"
+                f"Expected images in (B, T, C, H, W) format, got {tuple(images.shape)}"
             )
-        if images.shape[2] not in {1, 3} and images.shape[-1] in {1, 3}:
-            images = images.permute(0, 1, 4, 2, 3)
         b, t, c, h, w = images.shape
         encoded = self.image_encoder(images.view(b * t, c, h, w))
         encoded = self.image_proj(encoded)
         return encoded.view(b, t, -1)
 
-    def _prepare_state(self, obs_dict: dict[str, Any]) -> Optional[torch.Tensor]:
-        if not self.use_state or self.state_encoder is None:
-            return None
+    def _prepare_state(self, obs_dict: dict[str, Any]) -> torch.Tensor:
         if self.state_key not in obs_dict:
             raise KeyError(f"Missing state key '{self.state_key}' in observation.")
-        state = self._to_tensor(obs_dict[self.state_key])
-        if state.dim() == 2:
-            state = state.unsqueeze(0)
+        state = obs_dict[self.state_key].to(self.device)
+        if not isinstance(state, torch.Tensor):
+            raise ValueError(
+                f"Expected state to be of type torch.Tensor, but got {type(state)}."
+            )
         if state.dim() != 3:
             raise ValueError(
                 f"Expected state in (B, T, D) format, got {tuple(state.shape)}"
             )
         return self.state_encoder(state)
 
-    def encode_observations(
-        self, obs: Union[torch.Tensor, dict[str, Any]]
-    ) -> torch.Tensor:
+    def encode_observations(self, obs: dict[str, Any]) -> torch.Tensor:
         if isinstance(obs, dict):
             image_features = self._prepare_image(obs)
             state_features = self._prepare_state(obs)
@@ -662,13 +655,8 @@ class DiffusionPolicyModel(BasePolicy):
                 raise ValueError("No features extracted from observations.")
             fused = torch.cat(features, dim=-1)
         else:
-            fused = self._to_tensor(obs)
-            if fused.dim() == 2:
-                fused = fused.unsqueeze(0)
-            if fused.dim() != 3:
-                raise ValueError(
-                    f"Expected observation tensor with shape (B, T, D) or (T, D), got {tuple(fused.shape)}"
-                )
+            raise ValueError(f"Expected observation to be a dict but got {type(obs)}")
+
         if fused.size(1) != self.obs_horizon:
             raise ValueError(
                 f"Observation horizon mismatch. Expected {self.obs_horizon}, received {fused.size(1)}"
@@ -686,25 +674,13 @@ class DiffusionPolicyModel(BasePolicy):
         return self.condition_head(pooled)
 
     def forward(
-        self,
-        sample: torch.Tensor,
-        timestep: Union[torch.Tensor, float, int],
-        *,
-        global_cond: Optional[torch.Tensor] = None,
-        obs: Optional[Union[torch.Tensor, dict[str, Any]]] = None,
+        self, sample: torch.Tensor, timestep: torch.Tensor, obs: dict[str, Any] = None
     ) -> torch.Tensor:
         sample = sample.float()
-        if global_cond is None:
-            if obs is None:
-                raise ValueError(
-                    "Either global_cond or obs must be provided to forward()."
-                )
-            global_cond = self.encode_observations(obs)
+        global_cond = self.encode_observations(obs)
         return self.noise_pred_net(sample, timestep, global_cond=global_cond)
 
-    def _build_scheduler(self):
-        from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
-
+    def build_scheduler(self):
         return DDPMScheduler(
             num_train_timesteps=self.diffusion_steps,
             beta_schedule="squaredcos_cap_v2",
@@ -712,16 +688,9 @@ class DiffusionPolicyModel(BasePolicy):
             prediction_type="epsilon",
         )
 
-    def sample_actions(
-        self,
-        obs: Union[torch.Tensor, dict[str, Any]],
-        *,
-        scheduler=None,
-        num_inference_steps: Optional[int] = None,
-    ) -> torch.Tensor:
+    def sample_actions(self, obs: dict[str, Any], scheduler) -> torch.Tensor:
         self.set_eval_mode()
-        scheduler = scheduler or self._build_scheduler()
-        steps = num_inference_steps or self.diffusion_steps
+        steps = self.diffusion_steps
         scheduler.set_timesteps(steps)
         cond = self.encode_observations(obs)
         batch_size = cond.size(0)
@@ -736,7 +705,7 @@ class DiffusionPolicyModel(BasePolicy):
 
     def predict(self, obs: dict[str, Any], **kwargs) -> torch.Tensor:
         actions = self.sample_actions(obs, **kwargs)
-        return actions[:, 0]
+        return actions[:, 0].squeeze(0).detach().cpu().numpy()
 
     def reset(self):
         pass

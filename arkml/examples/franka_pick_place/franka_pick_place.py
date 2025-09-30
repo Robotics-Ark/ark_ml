@@ -263,7 +263,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--step_sleep",
         type=float,
-        default=1,
+        default=0.1,
         help="Sleep time between steps (default: 0.1s)",
     )
     parser.add_argument(

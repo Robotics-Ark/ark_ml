@@ -85,7 +85,7 @@ class PiZeroTrainer(Trainer):
         self.model.set_train_mode()
         global_steps = 0
         best_metric = float("inf")
-        best_ckpt_path: str | None = None
+        best_ckpt_path = None
 
         date_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         ckpt_dir = os.path.join(self.output_dir, date_str)

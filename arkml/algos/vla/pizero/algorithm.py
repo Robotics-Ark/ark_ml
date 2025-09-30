@@ -5,16 +5,17 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from ark.utils.utils import ConfigPath
 from arkml.core.algorithm import BaseAlgorithm
 from arkml.core.policy import BasePolicy
 from arkml.core.registry import ALGOS
+from arkml.utils.schema_io import get_visual_features
 from arkml.utils.utils import _normalise_shape
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 
 from .compute_stats import compute_pizero_stats
-from .config_utils import resolve_visual_feature_names
 from .dataset import PiZeroDataset
 from .evaluator import PiZeroEvaluator
 from .trainer import PiZeroTrainer
@@ -49,8 +50,14 @@ class PiZeroAlgorithm(BaseAlgorithm):
                 ),
             ]
         )
-        visual_features_cfg = getattr(cfg.algo.model, "visual_input_features", None)
-        visual_features = resolve_visual_feature_names(visual_features_cfg)
+
+        # Read global config
+        global_config = ConfigPath(cfg.global_config).read_yaml()
+
+        # Get camera names
+        io_schema = ConfigPath(global_config["channel_config"]).read_yaml()
+        visual_input_features = get_visual_features(schema=io_schema["observation"])
+        self.model.visual_input_features = visual_input_features
 
         img_dim = _normalise_shape(cfg.algo.model.image_dim)
 
@@ -59,11 +66,11 @@ class PiZeroAlgorithm(BaseAlgorithm):
             transform=transform,
             task_prompt=cfg.task_prompt,
             pred_horizon=cfg.algo.model.pred_horizon,
-            visual_input_features=visual_features,
+            visual_input_features=visual_input_features,
         )
         self.calculate_dataset_stats(
             dataset_path=cfg.data.dataset_path,
-            visual_input_features=visual_features,
+            visual_input_features=visual_input_features,
             obs_dim=cfg.algo.model.obs_dim,
             action_dim=cfg.algo.model.action_dim,
             image_dim=img_dim,

@@ -4,9 +4,10 @@ from typing import Any
 import numpy as np
 import torch
 from ark.utils.utils import ConfigPath
-from arkml.algos.vla.pizero.config_utils import resolve_visual_feature_names
 from arkml.algos.vla.pizero.models import PiZeroNet
 from arkml.core.policy_node import PolicyNode
+from arkml.utils.schema_io import get_visual_features
+from arkml.utils.utils import _image_to_tensor
 from arktypes import string_t
 
 
@@ -15,8 +16,14 @@ class PiZeroPolicyNode(PolicyNode):
 
     def __init__(self, cfg, device: str):
         model_cfg = cfg.algo.model
-        self.visual_input_features = resolve_visual_feature_names(
-            getattr(model_cfg, "visual_input_features", None)
+
+        # Read global config
+        global_config = ConfigPath(cfg.global_config).read_yaml()
+
+        # Get camera names
+        io_schema = ConfigPath(global_config["channel_config"]).read_yaml()
+        self.visual_input_features = get_visual_features(
+            schema=io_schema["observation"]
         )
 
         policy = PiZeroNet(
@@ -35,13 +42,9 @@ class PiZeroPolicyNode(PolicyNode):
             global_config=cfg.global_config,
         )
 
-        self.config = ConfigPath(cfg.global_config).read_yaml()
-        channel_name = self.config.get("channel", "user_input")
-
-        self.mode = self.config.get("mode")
+        # Listen to text prompt channel
+        channel_name = global_config.get("channel", "user_input")
         self.text_input = None
-
-        # Subscribe the requested channel
         self.sub = self.create_subscriber(
             channel_name, string_t, self._callback_text_input
         )
@@ -64,10 +67,6 @@ class PiZeroPolicyNode(PolicyNode):
     def prepare_observation(self, ob: dict[str, Any]):
         """Convert a single raw env observation into a batched policy input.
 
-        Notes:
-          - Produces per-camera keys matching ``self.visual_input_features``.
-          - Avoids redundant tensor copies; normalizes images to float32 in [0, 1].
-
         Args:
           ob: Single observation dict from the env. Expected keys include
             ``state`` and any camera names listed in ``visual_input_features``.
@@ -82,7 +81,7 @@ class PiZeroPolicyNode(PolicyNode):
             raise ValueError("Prompt input is empty")
         obs: dict[str, Any] = {"task": [self.text_input]}
 
-        # State: accept numpy array or tensor, ensure [1, D] float32
+        # State: tensor, ensure [1, D] float32
         state_value = ob.get("state")
         if state_value is not None:
             if isinstance(state_value, torch.Tensor):
@@ -93,46 +92,12 @@ class PiZeroPolicyNode(PolicyNode):
                 state_t = state_t.unsqueeze(0)
             obs["state"] = state_t.to(dtype=torch.float32, copy=False)
 
-        # Images: accept HWC (numpy/tensor) or CHW tensor, ensure [1, C, H, W] float32 in [0,1]
+        # Images:  tensor, ensure [1, C, H, W]
         for cam_name in self.visual_input_features:
             value = ob.get(cam_name)
             if value is None:
                 raise KeyError(f"Missing visual input '{cam_name}' in observation")
-
-            if isinstance(value, torch.Tensor):
-                img_t = value
-                # If HWC, convert to CHW
-                if (
-                    img_t.dim() == 3
-                    and img_t.shape[0] in (1, 3)
-                    and img_t.shape[-1] in (1, 3)
-                ):
-                    # Ambiguous; prefer assuming HWC if last dim is channels
-                    if img_t.shape[-1] in (1, 3):
-                        img_t = img_t.permute(2, 0, 1)
-                elif img_t.dim() == 3 and img_t.shape[-1] not in (1, 3):
-                    # Likely HWC
-                    img_t = img_t.permute(2, 0, 1)
-            else:
-                img_np = value
-                # Ensure contiguous numpy array
-                if hasattr(img_np, "copy"):
-                    img_np = img_np.copy()
-                img_t = torch.from_numpy(img_np).permute(2, 0, 1)  # (C, H, W)
-
-            # Normalize to float32 in [0, 1]
-            if img_t.dtype == torch.uint8:
-                img_t = img_t.to(torch.float32).div(255.0)
-            else:
-                img_t = img_t.to(torch.float32)
-                # If values appear in [0,255], normalize
-                if torch.isfinite(img_t).all() and img_t.max() > 1.0:
-                    img_t = img_t.div(255.0)
-
-            if img_t.dim() == 3:
-                img_t = img_t.unsqueeze(0)  # (1, C, H, W)
-
-            obs[cam_name] = img_t
+            obs[cam_name] = _image_to_tensor(value).unsqueeze(0)
 
         return obs
 

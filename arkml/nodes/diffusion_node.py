@@ -3,40 +3,61 @@ from typing import Any, Optional
 
 import numpy as np
 import torch
-from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+from arkml.core.policy_node import PolicyNode
 
-from arkml.nodes.policy_node import PolicyNode
+from arkml.core.factory import build_model
+from arkml.utils.utils import _image_to_tensor
+
+from ark.utils.utils import ConfigPath
+
+from arkml.utils.schema_io import get_visual_features
 
 
 class DiffusionPolicyNode(PolicyNode):
-    def __init__(self, policy, cfg, device: str = "cuda"):
-        model_cfg = cfg.algo.model
-        self.scheduler = DDPMScheduler(
-            num_train_timesteps=model_cfg.diffusion_steps,
-            beta_schedule="squaredcos_cap_v2",
-            clip_sample=True,
-            prediction_type="epsilon",
+    def __init__(self, cfg, device: str):
+
+        # Read global config
+        global_config = ConfigPath(cfg.global_config).read_yaml()
+
+        # Get camera names
+        io_schema = ConfigPath(global_config["channel_config"]).read_yaml()
+        self.visual_input_features = get_visual_features(
+            schema=io_schema["observation"]
         )
+        if len(self.visual_input_features) > 1:
+            raise NotImplementedError(
+                f"Diffusion policy only support one visual feature"
+            )
+
+        # Create Policy
+        model_cfg = cfg.algo.model
+        policy = build_model(cfg.algo)
+        state_dict = torch.load(model_cfg.model_path, map_location="cpu")
+        policy.load_state_dict(state_dict)
+        policy.eval()
+        policy.visual_input_features = self.visual_input_features
+
         super().__init__(
             policy=policy,
             policy_name=cfg.node_name,
             device=device,
             global_config=cfg.global_config,
         )
-        self.device = torch.device(device)
+
+        self.device = device
         self.num_diffusion_iters = model_cfg.diffusion_steps
         self.pred_horizon = model_cfg.pred_horizon
-        self.action_dim = model_cfg.action_dim
+        self.action_im = model_cfg.action_dim
         self.obs_horizon = model_cfg.obs_horizon
 
         image_cfg = getattr(model_cfg, "image_encoder", {})
         self.use_images = image_cfg.get("enabled", True)
-        self.image_key = image_cfg.get("key", "images")
 
-        proprio_cfg = getattr(model_cfg, "proprio_encoder", {})
-        self.use_state = proprio_cfg.get("enabled", True)
-        self.state_key = proprio_cfg.get("key", "state")
+        self.state_key = "state"
 
+        self.scheduler = policy.build_scheduler()
+
+        # Observation history queue
         self._state_history: deque[torch.Tensor] = deque(maxlen=self.obs_horizon)
         self._image_history: deque[torch.Tensor] = deque(maxlen=self.obs_horizon)
 
@@ -44,52 +65,25 @@ class DiffusionPolicyNode(PolicyNode):
         self._state_history.clear()
         self._image_history.clear()
 
-    def _legacy_flatten_state(self, obs: dict[str, Any]) -> np.ndarray:
-        cube = np.asarray(obs.get("cube", [0, 0, 0]), dtype=np.float32).reshape(-1)[:3]
-        target = np.asarray(obs.get("target", [0, 0, 0]), dtype=np.float32).reshape(-1)[:3]
-        grip = np.asarray(obs.get("gripper", [0.0]), dtype=np.float32).reshape(-1)[:1]
-        ee_pos, _ee_quat = obs.get("franka_ee", ([0, 0, 0], [0, 0, 0, 1]))
-        ee = np.asarray(ee_pos, dtype=np.float32).reshape(-1)[:3]
-        vec = np.concatenate([cube, target, grip, ee], axis=0)
-        if vec.shape[0] < 10:
-            vec = np.pad(vec, (0, 10 - vec.shape[0]))
-        return vec[:10]
-
     def _extract_state(self, obs: dict[str, Any]) -> Optional[torch.Tensor]:
-        if not self.use_state:
-            return None
         if self.state_key in obs:
             state = np.asarray(obs[self.state_key], dtype=np.float32)
         else:
-            state = self._legacy_flatten_state(obs)
+            raise ValueError(f"Observation {self.state_key} not found")
         state = np.asarray(state, dtype=np.float32)
-        if state.ndim == 2:
-            # assume (T, D), take last
-            state = state[-1]
         return torch.from_numpy(state).to(self.device)
 
     def _extract_image(self, obs: dict[str, Any]) -> Optional[torch.Tensor]:
         if not self.use_images:
             return None
-        if self.image_key not in obs:
+        if self.visual_input_features[0] not in obs:
             return None
-        image = obs[self.image_key]
-        if isinstance(image, dict):
-            image = image.get("rgb") or next(iter(image.values()))
-        image = np.asarray(image)
-        if image.ndim == 4:
-            # Assume (T, H, W, C) and take last frame
-            image = image[-1]
-        if image.ndim == 3 and image.shape[0] not in {1, 3} and image.shape[-1] in {1, 3}:
-            image = np.transpose(image, (2, 0, 1))
-        if image.ndim != 3:
-            raise ValueError(f"Unsupported image shape {image.shape}")
-        image_tensor = torch.from_numpy(image).float().to(self.device)
-        if image_tensor.max() > 1.0:
-            image_tensor = image_tensor / 255.0
-        return image_tensor
+        image = obs[self.visual_input_features[0]]
+        return _image_to_tensor(image)
 
-    def _stack_history(self, history: deque[torch.Tensor], example: torch.Tensor) -> torch.Tensor:
+    def _stack_history(
+        self, history: deque[torch.Tensor], example: torch.Tensor
+    ) -> torch.Tensor:
         if not history:
             history.append(example)
         while len(history) < self.obs_horizon:
@@ -111,16 +105,12 @@ class DiffusionPolicyNode(PolicyNode):
 
         obs_dict: dict[str, torch.Tensor] = {}
         if state_history is not None:
-            obs_dict["state"] = state_history.unsqueeze(0)
+            obs_dict[self.state_key] = state_history.unsqueeze(0)
         if image_history is not None:
-            obs_dict["images"] = image_history.unsqueeze(0)
+            obs_dict[self.visual_input_features[0]] = image_history.unsqueeze(0)
         if not obs_dict:
-            raise ValueError("No observations were collected for diffusion policy input.")
+            raise ValueError(
+                "No observations were collected for diffusion policy input."
+            )
 
-        self.scheduler.set_timesteps(self.num_diffusion_iters)
-        actions = self.policy.sample_actions(
-            obs_dict,
-            scheduler=self.scheduler,
-            num_inference_steps=self.num_diffusion_iters,
-        )
-        return actions.squeeze(0).detach().cpu().numpy()
+        return self.policy.predict(obs=obs_dict, scheduler=self.scheduler)

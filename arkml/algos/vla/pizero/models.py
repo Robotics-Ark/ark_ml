@@ -35,7 +35,7 @@ class PiZeroNet(BasePolicy):
         action_dim: int,
         image_dim: tuple,
         pred_horizon: int = 1,
-        visual_input_features=None,
+        visual_input_features: list[str] | None = None,
     ):
         super().__init__()
         self.obs_dim = obs_dim

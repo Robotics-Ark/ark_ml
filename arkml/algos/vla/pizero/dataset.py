@@ -4,7 +4,7 @@ from typing import Any
 
 import numpy as np
 import torch
-from PIL import Image
+from arkml.utils.utils import _image_to_tensor
 from torch.utils.data import Dataset
 from torchvision import transforms
 
@@ -78,7 +78,8 @@ class PiZeroDataset(Dataset):
                         image_value = state_block[candidate_idx]
             if image_value is None:
                 raise KeyError(f"Image data for '{cam_name}' not found in trajectory")
-            sample[cam_name] = self._image_to_tensor(image_value)
+            image_t = _image_to_tensor(image_value)
+            sample[cam_name] = self.transform(image_t)
 
         action_array = np.asarray(trajectory["action"], dtype=np.float32)
         if action_array.ndim == 1:
@@ -86,17 +87,3 @@ class PiZeroDataset(Dataset):
         sample["action"] = torch.from_numpy(action_array)
 
         return sample
-
-    def _image_to_tensor(self, image_value: Any) -> torch.Tensor:
-        array = np.asarray(image_value)
-        if array.dtype != np.uint8:
-            array_float = array.astype(np.float32)
-            if array_float.max() <= 1.0:
-                array_uint8 = np.clip(array_float * 255.0, 0, 255).astype(np.uint8)
-            else:
-                array_uint8 = np.clip(array_float, 0, 255).astype(np.uint8)
-        else:
-            array_uint8 = array
-
-        image = Image.fromarray(array_uint8)
-        return self.transform(image)

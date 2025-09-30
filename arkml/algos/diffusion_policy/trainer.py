@@ -1,14 +1,13 @@
 import copy
-from collections.abc import Mapping, Sequence
+import os
+from datetime import datetime
 
 import numpy as np
 import torch
 import torch.nn as nn
-from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+from arkml.core.algorithm import Trainer
 from diffusers.training_utils import EMAModel
 from tqdm.auto import tqdm
-
-from arkml.core.algorithm import Trainer
 
 
 class DiffusionTrainer(Trainer):
@@ -26,12 +25,12 @@ class DiffusionTrainer(Trainer):
         self,
         model,
         dataloader,
+        output_dir: str,
         device: str = "cuda",
         num_epochs: int = 20000,
         lr: float = 1e-3,
         weight_decay: float = 1e-6,
-        num_diffusion_iters: int = 100,
-        obs_horizon: int = 8,
+        obs_horizon: int = 9,
         pred_horizon: int = 16,
         use_ema: bool = True,
         ema_power: float = 0.75,
@@ -47,13 +46,9 @@ class DiffusionTrainer(Trainer):
         self.pred_horizon = pred_horizon
         self.use_ema = use_ema
         self.grad_clip = grad_clip
+        self.output_dir = output_dir
 
-        self.noise_scheduler = DDPMScheduler(
-            num_train_timesteps=num_diffusion_iters,
-            beta_schedule="squaredcos_cap_v2",
-            clip_sample=True,
-            prediction_type="epsilon",
-        )
+        self.noise_scheduler = self.model.build_scheduler()
 
         self.ema = (
             EMAModel(parameters=self.model.parameters(), power=ema_power)
@@ -67,162 +62,93 @@ class DiffusionTrainer(Trainer):
 
         self.best_loss = float("inf")
 
-    def _move_to_device(self, data, device):
-        if isinstance(data, torch.Tensor):
-            return data.to(device)
-        if isinstance(data, Mapping):
-            return {k: self._move_to_device(v, device) for k, v in data.items()}
-        if isinstance(data, Sequence) and not isinstance(data, (str, bytes)):
-            return type(data)(self._move_to_device(v, device) for v in data)
-        return data
+    def save_checkpoint(self, ckpt_dir, epoch_idx, mean_loss):
+        os.makedirs(ckpt_dir, exist_ok=True)  # ensure directory exists
 
-    def _reshape_sequence(self, tensor: torch.Tensor) -> torch.Tensor:
-        if tensor.dim() == 1:
-            numel = tensor.numel()
-            if numel % self.obs_horizon != 0:
-                raise ValueError(
-                    f"Cannot reshape tensor of shape {tuple(tensor.shape)} to obs_horizon {self.obs_horizon}"
-                )
-            step_dim = numel // self.obs_horizon
-            tensor = tensor.view(1, self.obs_horizon, step_dim)
-        elif tensor.dim() == 2:
-            if tensor.size(0) == self.obs_horizon and tensor.size(1) != self.obs_horizon:
-                tensor = tensor.unsqueeze(0)
-            elif tensor.size(1) == self.obs_horizon and tensor.size(0) != self.obs_horizon:
-                tensor = tensor.unsqueeze(0).transpose(1, 2)
-            elif tensor.size(1) % self.obs_horizon == 0:
-                step_dim = tensor.size(1) // self.obs_horizon
-                tensor = tensor.view(tensor.size(0), self.obs_horizon, step_dim)
-            else:
-                raise ValueError(
-                    f"Cannot reshape tensor of shape {tuple(tensor.shape)} to obs_horizon {self.obs_horizon}"
-                )
-        elif tensor.dim() == 3:
-            if tensor.size(1) == self.obs_horizon:
-                pass
-            elif tensor.size(2) == self.obs_horizon:
-                tensor = tensor.transpose(1, 2)
-            elif tensor.size(0) == self.obs_horizon and tensor.size(1) != self.obs_horizon:
-                tensor = tensor.transpose(0, 1).unsqueeze(0)
-            else:
-                raise ValueError(
-                    f"Cannot reshape tensor of shape {tuple(tensor.shape)} to obs_horizon {self.obs_horizon}"
-                )
-        else:
-            raise ValueError(
-                f"Cannot reshape tensor of shape {tuple(tensor.shape)} to obs_horizon {self.obs_horizon}"
-            )
-        return tensor.contiguous().float()
+        def save_model(model, prefix):
+            filename = f"{prefix}{epoch_idx + 1}.pth"
+            path = os.path.join(ckpt_dir, filename)
+            torch.save(model.state_dict(), path)
 
-    def _normalize_tensor(self, key: str, value: torch.Tensor) -> torch.Tensor:
-        name = key.lower()
-        if name in self.STATE_KEYS:
-            return self._reshape_sequence(value.float())
-        return value.float()
+        # Always save "latest"
+        save_model(self.model, "noise_pred_net_latest")
 
-    def _normalize_obs_value(self, key: str, value, device):
-        if isinstance(value, torch.Tensor):
-            return self._normalize_tensor(key, value.to(device))
-        if isinstance(value, Mapping):
-            return {
-                sub_key: self._normalize_obs_value(sub_key, sub_val, device)
-                for sub_key, sub_val in value.items()
-            }
-        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-            tensor = torch.as_tensor(value, dtype=torch.float32, device=device)
-            return self._normalize_tensor(key, tensor)
-        return value
+        ema_model = None
+        if self.ema is not None:
+            ema_model = copy.deepcopy(self.model)
+            self.ema.copy_to(ema_model.parameters())
+            save_model(ema_model, "ema_noise_pred_net_latest")
 
-    def _format_observation(self, obs, device):
-        if isinstance(obs, torch.Tensor):
-            tensor = obs.to(device, dtype=torch.float32)
-            return {"state": self._reshape_sequence(tensor)}
-        if isinstance(obs, Mapping):
-            formatted = {
-                key: self._normalize_obs_value(key, value, device)
-                for key, value in obs.items()
-            }
-            if "state" not in formatted:
-                for key, value in formatted.items():
-                    if key.lower() in self.STATE_KEYS:
-                        formatted["state"] = value
-                        break
-            return formatted
-        if isinstance(obs, Sequence) and not isinstance(obs, (str, bytes)):
-            tensor = torch.as_tensor(obs, dtype=torch.float32, device=device)
-            return {"state": self._reshape_sequence(tensor)}
-        tensor = torch.as_tensor(obs, dtype=torch.float32, device=device)
-        return {"state": self._reshape_sequence(tensor)}
+        # Save "best" if loss improved
+        if mean_loss < self.best_loss:
+            self.best_loss = mean_loss
+            save_model(self.model, "noise_pred_net_best")
+
+            if ema_model is not None:  # reuse already built ema_model
+                save_model(ema_model, "ema_noise_pred_net_best")
 
     def fit(self) -> dict:
-        device = torch.device(self.device)
-        self.model.to(device)
+        self.model.to(self.device)
         self.model.set_train_mode()
         if self.ema is not None:
-            self.ema.to(device)
+            self.ema.to(self.device)
+
+        date_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        ckpt_dir = os.path.join(self.output_dir, date_str)
+        os.makedirs(ckpt_dir, exist_ok=True)
 
         history = {"loss": []}
 
-        with tqdm(range(self.num_epochs), desc="Epoch") as tglobal:
-            for epoch_idx in tglobal:
-                epoch_loss = []
+        with tqdm(range(self.num_epochs), desc="Epoch") as epoch_bar:
+            for epoch_idx in epoch_bar:
+                batch_losses = []
 
                 for batch in tqdm(self.dataloader, desc="Batch", leave=False):
-                    actions = batch["action"].to(device)
-                    raw_obs = batch.get("obs", batch.get("state"))
-                    if raw_obs is None:
-                        raise KeyError("Batch must contain 'obs' or 'state' entries.")
-                    obs = self._format_observation(raw_obs, device)
-                    B = actions.size(0)
+                    actions = batch["action"].to(self.device)
+                    batch_size = actions.size(0)
 
+                    # Sample noise and time steps
                     noise = torch.randn_like(actions)
                     timesteps = torch.randint(
                         0,
                         self.noise_scheduler.config.num_train_timesteps,
-                        (B,),
-                        device=device,
+                        (batch_size,),
+                        device=self.device,
                         dtype=torch.long,
                     )
 
-                    noisy_actions = self.noise_scheduler.add_noise(actions, noise, timesteps)
-
-                    noise_pred = self.model(
-                        noisy_actions,
-                        timesteps,
-                        obs=obs,
+                    # Forward pass
+                    noisy_actions = self.noise_scheduler.add_noise(
+                        actions, noise, timesteps
                     )
+                    noise_pred = self.model(noisy_actions, timesteps, obs=batch)
                     loss = nn.functional.mse_loss(noise_pred, noise)
 
+                    # Backward pass
+                    self.optimizer.zero_grad(set_to_none=True)
                     loss.backward()
+
                     if self.grad_clip is not None:
                         torch.nn.utils.clip_grad_norm_(
                             self.model.parameters(), self.grad_clip
                         )
+
                     self.optimizer.step()
-                    self.optimizer.zero_grad(set_to_none=True)
 
                     if self.ema is not None:
                         self.ema.step(self.model.parameters())
 
-                    epoch_loss.append(loss.item())
+                    batch_losses.append(loss.item())
 
-                mean_loss = float(np.mean(epoch_loss)) if epoch_loss else float("inf")
+                mean_loss = (
+                    float(np.mean(batch_losses)) if batch_losses else float("inf")
+                )
                 history["loss"].append(mean_loss)
-                tglobal.set_postfix({"loss": mean_loss})
+                epoch_bar.set_postfix({"loss": mean_loss})
 
-                torch.save(self.model.state_dict(), "noise_pred_net_latest.pth")
-
-                if self.ema is not None:
-                    ema_model = copy.deepcopy(self.model)
-                    self.ema.copy_to(ema_model.parameters())
-                    torch.save(ema_model.state_dict(), "ema_noise_pred_net_latest.pth")
-
-                if mean_loss < self.best_loss:
-                    self.best_loss = mean_loss
-                    torch.save(self.model.state_dict(), "noise_pred_net_best.pth")
-                    if self.ema is not None:
-                        ema_model = copy.deepcopy(self.model)
-                        self.ema.copy_to(ema_model.parameters())
-                        torch.save(ema_model.state_dict(), "ema_noise_pred_net_best.pth")
+                # Save checkpoints
+                self.save_checkpoint(
+                    ckpt_dir=ckpt_dir, epoch_idx=epoch_idx, mean_loss=mean_loss
+                )
 
         return history
