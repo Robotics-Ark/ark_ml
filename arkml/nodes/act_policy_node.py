@@ -1,17 +1,14 @@
-import numpy as np
 import torch
 from torchvision import transforms as T
-from typing_extensions import overload
-from arktypes.utils import pack
-from arktypes import task_space_command_t, string_t
+from typing import Any
 
 from arkml.algos.act.models import ACT
 from arkml.core.policy_node import PolicyNode
 from typing import Any
-from arkml.utils.franka_utils import observation_unpacking, action_packing
 
 import numpy as np
-from PIL import Image
+import numpy.typing as npt
+
 
 class TemporalEnsembler:
     """
@@ -26,16 +23,29 @@ class TemporalEnsembler:
       cnt_buf -> denominator (total weight)
     """
 
-    def __init__(self, K, action_dim, coeff=0.01):
+    def __init__(self, K: int, action_dim: int, coeff: float = 0.01):
         self.K = int(K)
         self.action_dim = int(action_dim)
         self.coeff = float(coeff)
 
         # keep original field names for compatibility with your reset()
         self.sum_buf = np.zeros((self.K, self.action_dim), dtype=np.float32)  # numerator
-        self.cnt_buf = np.zeros((self.K,), dtype=np.float32)                  # denominator (weights)
+        self.cnt_buf = np.zeros((self.K,), dtype=np.float32)  # denominator (weights)
 
-    def step_and_get(self, new_chunk, stride=1):
+    def step_and_get(self,
+                     new_chunk: npt.NDArray[np.floating],
+                     stride: int = 1, ):
+        """
+        Update the ensembler with a new chunk and return the next `stride` actions.
+
+        Args:
+            new_chunk: Array of predicted actions with shape ``(K, action_dim)``.
+                       Extra rows/cols are ignored; if shorter, only the first rows are used.
+            stride: Number of steps to advance and emit.
+
+        Returns:
+            Discounted-averaged actions of shape ``(stride, action_dim)``.
+        """
         K = self.K
         stride = int(stride)
 
@@ -65,12 +75,22 @@ class TemporalEnsembler:
         return smoothed[:stride]
 
 
-
 class ActPolicyNode(PolicyNode):
+    """
+    PolicyNode wrapper for the ACT (Action-Chunk Transformer) policy.
+
+    This node loads a trained ACT policy, prepares environment observations,
+    runs forward passes, and returns actions for execution.
+
+    Args:
+        cfg: Configuration object with fields for model and node setup.
+        device: Torch device to run the policy on (default: "cpu").
+    """
+
     def __init__(
-        self,
-        cfg,
-        device="cpu",
+            self,
+            cfg: Any,
+            device="cpu",
     ):
         """
         Returns `actions_to_exec` from predict()
@@ -121,7 +141,6 @@ class ActPolicyNode(PolicyNode):
         self.ensembler.sum_buf[:] = 0.0
         self.ensembler.cnt_buf[:] = 0.0
 
-
     def prepare_observation(self, ob: dict[str, Any]):
         """Convert a single raw env observation into a batched policy input.
 
@@ -152,12 +171,14 @@ class ActPolicyNode(PolicyNode):
 
     @torch.no_grad()
     def _predict_chunk(self, image_np, joints_t, K):
-
+        """
+         Predict a chunk of K actions from image and joint inputs.
+         """
         z_dim = getattr(self.policy, "z_dim", 32)
         z_zero = torch.zeros((1, z_dim), dtype=torch.float32, device=self.device)
 
         if image_np.ndim == 3:
-            img_t = image_np.unsqueeze(0) # -> (1,3,H,W)
+            img_t = image_np.unsqueeze(0)  # -> (1,3,H,W)
         else:
             img_t = image_np
 
@@ -189,5 +210,3 @@ class ActPolicyNode(PolicyNode):
             new_chunk=chunk_pred, stride=self.action_stride
         )
         return actions_to_exec[-1]
-
-
