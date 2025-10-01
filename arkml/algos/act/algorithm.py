@@ -10,10 +10,21 @@ from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 
 from .dataset import ActionChunkingArkDataset
+from arkml.core.policy import BasePolicy
+
 
 @ALGOS.register("act")
 class ACTalgorithm(BaseAlgorithm):
-    def __init__(self, policy, device: str, cfg: DictConfig):
+    def __init__(self, policy: BasePolicy, device: str, cfg: DictConfig):
+        """Algorithm wrapper for act training and evaluation.
+
+
+          Args:
+              policy : The policy to be trained.
+              device : Device identifier used to move the policy and run training.
+              cfg : Configuration object containing all configuration parameters.
+
+          """
         super().__init__()
         self.policy = policy.to(device=device)
         self.device = device
