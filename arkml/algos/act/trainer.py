@@ -3,19 +3,56 @@ import shutil
 from contextlib import nullcontext
 import torch.nn as nn
 import torch
+from torch.utils.data import DataLoader
 from tqdm import tqdm
-
+from arkml.core.policy import BasePolicy
 from arkml.core.algorithm import Trainer
 
-def masked_l1(pred, target, mask):
+def masked_l1(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """
+    Masked L1 loss.
+
+    Computes the mean absolute error between `pred` and `target`,
+    considering only positions where `mask=1`.
+
+    Parameters
+    ----------
+    pred : torch.Tensor, shape (B, K, A)
+        Predictions.
+    target : torch.Tensor, shape (B, K, A)
+        Ground truth.
+    mask : torch.Tensor, shape (B, K)
+        Binary mask (1 = valid, 0 = ignore).
+
+    Returns
+    -------
+    torch.Tensor
+        Scalar masked L1 loss.
+    """
     diff = (pred - target).abs()  # (B,K,A)
     m = mask.unsqueeze(-1)
     num = (diff * m).sum()
     den = (m.sum() * pred.size(-1)).clamp_min(1.0)
     return num / den
 
-def kl_loss(mu, logvar):
-    # KL(q||p), p=N(0,I)
+def kl_loss(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+    """
+    KL divergence loss for Gaussian distributions.
+
+    Computes KL(q||p) where q = N(mu, exp(logvar)) and p = N(0, I).
+
+    Parameters
+    ----------
+    mu : torch.Tensor, shape (B, D)
+        Mean of latent distribution.
+    logvar : torch.Tensor, shape (B, D)
+        Log-variance of latent distribution.
+
+    Returns
+    -------
+    torch.Tensor
+        KL divergence per sample, shape (B,).
+    """
     return -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum(dim=-1)  # (B,)
 
 def count_parameters(model: nn.Module):
@@ -28,8 +65,8 @@ def count_parameters(model: nn.Module):
 class ACTransformerTrainer(Trainer):
     def __init__(
         self,
-        model,
-        dataloader,
+        model: BasePolicy,
+        dataloader: DataLoader,
         epochs: int = 1,
         lr: float = 1e-5,
         weight_decay: float = 0.0,
@@ -37,6 +74,18 @@ class ACTransformerTrainer(Trainer):
         beta: float = 10.0,
         device="cuda",
     ):
+        """Initialize the ACT trainer.
+
+          Args:
+            model: Policy/model to train.
+            dataloader: Training dataloader yielding compatible batches.
+            epochs: Number of training epochs.
+            lr: Learning rate for Adam optimizer.
+            weight_decay: Weight decay for Adam optimizer.
+            grad_clip: Gradient clipping value.
+            beta: Weight for KL loss.
+            device: Device identifier ("cuda", "cpu", etc.).
+        """
         self.device = device
         self.epochs = epochs
         self.beta = beta

@@ -3,16 +3,51 @@ import torch
 from arkml.core.algorithm import Evaluator
 
 
-def masked_l1(pred, target, mask):
+def masked_l1(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """
+    Masked L1 loss.
+
+    Computes the mean absolute error between `pred` and `target`,
+    considering only positions where `mask=1`.
+
+    Parameters
+    ----------
+    pred : torch.Tensor, shape (B, K, A)
+        Predictions.
+    target : torch.Tensor, shape (B, K, A)
+        Ground truth.
+    mask : torch.Tensor, shape (B, K)
+        Binary mask (1 = valid, 0 = ignore).
+
+    Returns
+    -------
+    torch.Tensor
+        Scalar masked L1 loss.
+    """
     diff = (pred - target).abs()  # (B,K,A)
     m = mask.unsqueeze(-1)
     num = (diff * m).sum()
     den = (m.sum() * pred.size(-1)).clamp_min(1.0)
     return num / den
 
+def kl_loss(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+    """
+    KL divergence loss for Gaussian distributions.
 
-def kl_loss(mu, logvar):
-    # KL(q||p), p=N(0,I)
+    Computes KL(q||p) where q = N(mu, exp(logvar)) and p = N(0, I).
+
+    Parameters
+    ----------
+    mu : torch.Tensor, shape (B, D)
+        Mean of latent distribution.
+    logvar : torch.Tensor, shape (B, D)
+        Log-variance of latent distribution.
+
+    Returns
+    -------
+    torch.Tensor
+        KL divergence per sample, shape (B,).
+    """
     return -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum(dim=-1)  # (B,)
 
 
