@@ -69,3 +69,10 @@ def _build_pizero():
     from arkml.nodes.pizero_node import PiZeroPolicyNode
 
     return PiZeroPolicyNode
+
+@register_policy("act")
+def _build_ACT():
+    """Build and return ACT"""
+    from arkml.nodes.act_policy_node import ActPolicyNode
+
+    return ActPolicyNode
