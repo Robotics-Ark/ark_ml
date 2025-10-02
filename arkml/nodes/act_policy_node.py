@@ -28,12 +28,16 @@ class TemporalEnsembler:
         self.coeff = float(coeff)
 
         # keep original field names for compatibility with your reset()
-        self.sum_buf = np.zeros((self.K, self.action_dim), dtype=np.float32)  # numerator
+        self.sum_buf = np.zeros(
+            (self.K, self.action_dim), dtype=np.float32
+        )  # numerator
         self.cnt_buf = np.zeros((self.K,), dtype=np.float32)  # denominator (weights)
 
-    def step_and_get(self,
-                     new_chunk: npt.NDArray[np.floating],
-                     stride: int = 1, ):
+    def step_and_get(
+        self,
+        new_chunk: npt.NDArray[np.floating],
+        stride: int = 1,
+    ):
         """
         Update the ensembler with a new chunk and return the next `stride` actions.
 
@@ -86,7 +90,10 @@ class ActPolicyNode(PolicyNode):
         device: Torch device to run the policy on (default: "cpu").
     """
 
-    def __init__(self,device="cpu",):
+    def __init__(
+        self,
+        device="cpu",
+    ):
         """
         Returns `actions_to_exec` from predict()
         """
@@ -166,8 +173,8 @@ class ActPolicyNode(PolicyNode):
     @torch.no_grad()
     def _predict_chunk(self, image_np, joints_t, K):
         """
-         Predict a chunk of K actions from image and joint inputs.
-         """
+        Predict a chunk of K actions from image and joint inputs.
+        """
         z_dim = getattr(self.policy, "z_dim", 32)
         z_zero = torch.zeros((1, z_dim), dtype=torch.float32, device=self.device)
 
@@ -197,7 +204,7 @@ class ActPolicyNode(PolicyNode):
             "state": torch.tensor(obs_seq["state"], dtype=torch.float32),
         }
         chunk_pred = self._predict_chunk(
-            obs['image'], obs['state'], self.chunk_size
+            obs["image"], obs["state"], self.chunk_size
         )  # (K, action_dim)
 
         actions_to_exec = self.ensembler.step_and_get(
