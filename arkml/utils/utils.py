@@ -5,6 +5,7 @@ from typing import Any
 
 import numpy as np
 import torch
+from PIL import Image
 from torch import nn
 from torchvision import transforms
 
@@ -89,7 +90,7 @@ def print_trainable_summary(model: nn.Module) -> None:
     print("==============================\n")
 
 
-def _image_to_tensor(image_value: Any) -> torch.Tensor:
+def _image_to_tensor(image_value: Any, transform: transforms = None) -> torch.Tensor:
     array = np.asarray(image_value)
     if array.dtype != np.uint8:
         array_float = array.astype(np.float32)
@@ -100,7 +101,7 @@ def _image_to_tensor(image_value: Any) -> torch.Tensor:
     else:
         array_uint8 = array
 
-    transform = transforms.ToTensor()
+    transform = transform or transforms.ToTensor()
 
-    # image = Image.fromarray(array_uint8)
-    return transform(array_uint8)
+    image = Image.fromarray(array_uint8)
+    return transform(image)

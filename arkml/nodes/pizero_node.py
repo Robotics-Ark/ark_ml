@@ -3,10 +3,9 @@ from typing import Any
 
 import numpy as np
 import torch
-from ark.utils.utils import ConfigPath
 from arkml.algos.vla.pizero.models import PiZeroNet
+from arkml.core.app_context import ArkMLContext
 from arkml.core.policy_node import PolicyNode
-from arkml.utils.schema_io import get_visual_features
 from arkml.utils.utils import _image_to_tensor
 from arktypes import string_t
 
@@ -14,36 +13,30 @@ from arktypes import string_t
 class PiZeroPolicyNode(PolicyNode):
     """Wrapper node for PiZero"""
 
-    def __init__(self, cfg, device: str):
-        model_cfg = cfg.algo.model
-
-        # Read global config
-        global_config = ConfigPath(cfg.global_config).read_yaml()
-
-        # Get camera names
-        io_schema = ConfigPath(global_config["channel_config"]).read_yaml()
-        self.visual_input_features = get_visual_features(
-            schema=io_schema["observation"]
-        )
+    def __init__(self, device: str):
+        """
+        Initialize PiZeroPolicyNode
+        Args:
+            device: Device to use
+        """
+        model_cfg = ArkMLContext.cfg.get("algo").get("model")
 
         policy = PiZeroNet(
-            policy_type=model_cfg.policy_type,
-            model_path=model_cfg.model_path,
-            obs_dim=model_cfg.obs_dim,
-            action_dim=model_cfg.action_dim,
-            image_dim=model_cfg.image_dim,
-            visual_input_features=self.visual_input_features,
+            policy_type=model_cfg.get("policy_type"),
+            model_path=model_cfg.get("model_path"),
+            obs_dim=model_cfg.get("obs_dim"),
+            action_dim=model_cfg.get("action_dim"),
+            image_dim=model_cfg.get("image_dim"),
         )
 
         super().__init__(
             policy=policy,
             device=device,
-            policy_name=cfg.node_name,
-            global_config=cfg.global_config,
+            policy_name=ArkMLContext.cfg.get("node_name"),
         )
 
         # Listen to text prompt channel
-        channel_name = global_config.get("channel", "user_input")
+        channel_name = ArkMLContext.global_config.get("channel", "user_input")
         self.text_input = None
         self.sub = self.create_subscriber(
             channel_name, string_t, self._callback_text_input
@@ -53,15 +46,31 @@ class PiZeroPolicyNode(PolicyNode):
         self.policy.reset()
         self.policy.set_eval_mode()
 
-        self.n_infer_actions = getattr(model_cfg, "pred_horizon", 10)
+        self.n_infer_actions = getattr(model_cfg, "pred_horizon", 1)
         self._action_queue: deque[np.ndarray] = deque()
 
-    def _on_reset(self):
+    def _on_reset(self) -> None:
+        """
+        Policy specific reset function.
+
+        Returns:
+            None
+        """
         self._action_queue.clear()
 
     def _callback_text_input(
-        self, channel_name: str, received_time: str, msg: string_t
-    ):
+        self, time_stamp: int, channel_name: str, msg: string_t
+    ) -> None:
+        """
+        Service callback to read text prompt.
+        Args:
+            time_stamp: Callback time
+            channel_name: Service channel id.
+            msg: Message
+
+        Returns:
+            None
+        """
         self.text_input = msg.data
 
     def prepare_observation(self, ob: dict[str, Any]):
@@ -93,7 +102,7 @@ class PiZeroPolicyNode(PolicyNode):
             obs["state"] = state_t.to(dtype=torch.float32, copy=False)
 
         # Images:  tensor, ensure [1, C, H, W]
-        for cam_name in self.visual_input_features:
+        for cam_name in ArkMLContext.visual_input_features:
             value = ob.get(cam_name)
             if value is None:
                 raise KeyError(f"Missing visual input '{cam_name}' in observation")

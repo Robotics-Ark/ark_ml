@@ -1,686 +1,892 @@
+"""
+Diffusion policy models and building blocks for sequence/action generation.
+
+This module implements a lightweight 1D UNet-style architecture and helpers
+used to model action trajectories as a denoising diffusion process. It includes:
+
+- Sinusoidal time-step embeddings for diffusion schedules.
+- A safe GroupNorm factory that adapts group count to channel size.
+- 1D residual blocks plus up/downsampling layers for temporal features.
+- Encoders for observations (e.g., images, joint states) to condition the model.
+- A `UNet1D` backbone that predicts noise for denoising steps.
+- `DiffusionPolicyModel` registered with ArkML and integrated with a
+  `DDPMScheduler` for training and sampling.
+
+Typical usage registers the model via the ArkML registry (key: "DiffusionPolicyModel"),
+trains it with MSE on predicted noise, and samples actions by iteratively
+denoising from Gaussian noise under the chosen scheduler.
+"""
+
+from __future__ import annotations
+
 from typing import Any
 
 import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from arkml.core.app_context import ArkMLContext
 from arkml.core.policy import BasePolicy
 from arkml.core.registry import MODELS
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+from torchvision.models import resnet18
+
+try:
+    from torchvision.models import ResNet18_Weights  # torchvision >= 0.13
+except Exception:
+    ResNet18_Weights = None
 
 
 class SinusoidalPosEmb(nn.Module):
+    """
+    Computes sinusoidal positional / time-step embeddings for diffusion models.
+
+    This module maps a scalar timestep `t` (e.g. diffusion step index) into a
+    high-dimensional embedding vector using fixed sine and cosine functions of
+    different frequencies, similar to the positional encodings introduced in
+    the Transformer architecture.
+
+    Args:
+        dim (int): Dimension of the output embedding. Must be >= 2.
+
+    Input:
+        t (Tensor): Tensor of shape (B,) or (B, 1) containing timesteps
+            (either integer indices or continuous values).
+
+    Output:
+        Tensor: Sinusoidal embedding of shape (B, dim).
+    """
+
     def __init__(self, dim: int):
         super().__init__()
+        if dim < 2:
+            raise ValueError("SinusoidalPosEmb dim must be >= 2")
         self.dim = dim
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        device = x.device
-        half_dim = self.dim // 2
-        if half_dim == 0:
-            raise ValueError("SinusoidalPosEmb dimension must be >= 2")
-        emb_scale = math.log(10000) / (half_dim - 1)
-        emb = torch.exp(torch.arange(half_dim, device=device) * -emb_scale)
-        emb = x[:, None] * emb[None, :]
-        emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
+    def forward(self, t: torch.Tensor) -> torch.Tensor:
+        """
+        Computes sinusoidal positional / time-step embeddings for diffusion models.
+
+        Args:
+            t (Tensor): Tensor of shape (B,) or (B, 1) containing timesteps
+                (either integer indices or continuous values).
+
+        Returns:
+            Tensor: Sinusoidal embedding of shape (B, dim).
+        """
+        # t: (B,) or (B,1) integer timestep or float tensor
+        device = t.device
+        dtype = torch.float32
+        half = self.dim // 2
+        emb_scale = math.log(10000.0) / (half - 1)
+        freqs = torch.exp(torch.arange(half, device=device, dtype=dtype) * -emb_scale)
+        t_float = t.to(dtype).view(-1, 1)
+        args = t_float * freqs.view(1, -1)
+        emb = torch.cat([torch.sin(args), torch.cos(args)], dim=-1)
         if self.dim % 2 == 1:
-            emb = torch.nn.functional.pad(emb, (0, 1))
-        return emb
+            emb = F.pad(emb, (0, 1), value=0.0)
+        return emb  # (B, dim)
 
 
-class Downsample1d(nn.Module):
-    def __init__(self, dim: int):
+# Safe GroupNorm factory
+def get_groupnorm(num_channels: int, preferred_groups: int = 32) -> nn.Module:
+    """
+    Create a GroupNorm layer with a valid number of groups for the given channels.
+
+    This utility ensures the chosen number of groups divides `num_channels`.
+    It starts from `preferred_groups` (default: 32) and decreases until a valid
+    divisor is found, falling back to 1 if necessary.
+
+    Args:
+        num_channels (int): Number of feature channels in the input tensor.
+        preferred_groups (int, optional): Preferred maximum number of groups.
+            Defaults to 32.
+
+    Returns:
+        nn.GroupNorm: A GroupNorm layer with `groups` groups and
+        `num_channels` channels.
+
+    Example:
+        norm = get_groupnorm(64)    # 32 groups of 2 channels
+        norm = get_groupnorm(30)    # falls back to 15 groups of 2
+        norm = get_groupnorm(7)     # falls back to 1 group (LayerNorm-like)
+    """
+    groups = min(preferred_groups, num_channels)
+    # ensure groups divide channels, lower until divides
+    while num_channels % groups != 0 and groups > 1:
+        groups -= 1
+    groups = max(1, groups)
+    return nn.GroupNorm(groups, num_channels)
+
+
+class ZeroConv1d(nn.Module):
+    """
+    Zero-initialized 1×1 Conv1d layer for ControlNet-style feature injection.
+
+    This layer applies a pointwise 1D convolution (`kernel_size=1`) whose
+    weights and bias are initialized to zero. At initialization, the layer
+    outputs zeros regardless of the input, ensuring that it does not
+    perturb the base network’s activations. During training, the weights
+    are updated and the layer gradually learns to inject conditioning
+    features (e.g., past action embeddings in Diff-Control).
+
+    Args:
+        in_ch (int): Number of input channels.
+        out_ch (int): Number of output channels.
+
+    Input:
+        x (Tensor): Input tensor of shape (B, in_ch, T),
+            where B is batch size and T is sequence length.
+
+    Output:
+        Tensor: Output tensor of shape (B, out_ch, T).
+
+    Example:
+        layer = ZeroConv1d(64, 128)
+        x = torch.randn(16, 64, 24)   # (batch, channels, sequence)
+        out = layer(x)                # (16, 128, 24), all zeros at init
+    """
+
+    def __init__(self, in_ch: int, out_ch: int):
         super().__init__()
-        self.conv = nn.Conv1d(dim, dim, kernel_size=3, stride=2, padding=1)
+        self.conv = nn.Conv1d(in_ch, out_ch, kernel_size=1)
+        nn.init.zeros_(self.conv.weight)
+        nn.init.zeros_(self.conv.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.conv(x)
 
 
-class Upsample1d(nn.Module):
-    def __init__(self, dim: int):
-        super().__init__()
-        self.conv = nn.ConvTranspose1d(dim, dim, kernel_size=4, stride=2, padding=1)
+class ResidualConv1d(nn.Module):
+    """
+    Two-layer 1D convolutional residual block with GroupNorm and SiLU.
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.conv(x)
+    The block stacks Conv1d->GroupNorm->SiLU twice and adds a skip path.
+    The skip either passes the input or projects it with a 1x1 convolution
+    when channel counts differ. Padding keeps the temporal dimension unchanged.
 
+    Args:
+        in_ch (int): Number of input channels.
+        out_ch (int): Number of output channels.
+        kernel_size (int, optional): Convolution kernel size. Defaults to 3.
 
-class Conv1dBlock(nn.Module):
+    Input:
+        x (Tensor): Tensor of shape (B, in_ch, T) containing sequence features.
+
+    Output:
+        Tensor: Residual features of shape (B, out_ch, T).
+    """
+
     def __init__(
-        self, inp_channels: int, out_channels: int, kernel_size: int, n_groups: int = 8
+        self,
+        in_ch: int,
+        out_ch: int,
+        kernel_size: int = 3,
     ):
         super().__init__()
         padding = kernel_size // 2
-        self.block = nn.Sequential(
-            nn.Conv1d(inp_channels, out_channels, kernel_size, padding=padding),
-            nn.GroupNorm(n_groups, out_channels),
-            nn.Mish(),
+        self.conv1 = nn.Conv1d(in_ch, out_ch, kernel_size, padding=padding)
+        self.norm1 = get_groupnorm(out_ch)
+        self.act = nn.SiLU()
+        self.conv2 = nn.Conv1d(out_ch, out_ch, kernel_size, padding=padding)
+        self.norm2 = get_groupnorm(out_ch)
+        self.skip = (
+            nn.Identity()
+            if in_ch == out_ch
+            else nn.Conv1d(in_ch, out_ch, kernel_size=1)
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.block(x)
+        h = self.conv1(x)
+        h = self.norm1(h)
+        h = self.act(h)
+        h = self.conv2(h)
+        h = self.norm2(h)
+        return self.act(h + self.skip(x))
 
 
-class ConditionalResidualBlock1D(nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        cond_dim: int,
-        kernel_size: int = 3,
-        n_groups: int = 8,
-    ):
+class Downsample1d(nn.Module):
+    """
+    Strided 1D convolutional downsampling layer.
+
+    Applies a Conv1d with kernel_size=4, stride=2, and padding=1 to
+    reduce the temporal length by roughly half while keeping channels
+    unchanged. Learns a low-pass projection that is more stable than
+    naive subsampling.
+
+    Args:
+        ch (int): Number of input/output channels.
+
+    Input:
+        x (Tensor): Input of shape (B, ch, T).
+
+    Output:
+        Tensor: Downsampled tensor of shape (B, ch, ceil(T/2)).
+    """
+
+    def __init__(self, ch: int):
         super().__init__()
-        self.blocks = nn.ModuleList(
-            [
-                Conv1dBlock(in_channels, out_channels, kernel_size, n_groups=n_groups),
-                Conv1dBlock(out_channels, out_channels, kernel_size, n_groups=n_groups),
-            ]
-        )
-        cond_channels = out_channels * 2
-        self.cond_encoder = nn.Sequential(
-            nn.Mish(),
-            nn.Linear(cond_dim, cond_channels),
-        )
-        self.out_channels = out_channels
-        if in_channels != out_channels:
-            self.residual_conv = nn.Conv1d(in_channels, out_channels, kernel_size=1)
-        else:
-            self.residual_conv = nn.Identity()
+        self.pool = nn.Conv1d(ch, ch, kernel_size=4, stride=2, padding=1)
 
-    def forward(self, x: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
-        out = self.blocks[0](x)
-        embed = self.cond_encoder(cond)
-        embed = embed.view(embed.size(0), 2, self.out_channels, 1)
-        scale = embed[:, 0]
-        bias = embed[:, 1]
-        out = scale * out + bias
-        out = self.blocks[1](out)
-        out = out + self.residual_conv(x)
-        return out
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.pool(x)
 
 
-class ConditionalUnet1D(nn.Module):
-    def __init__(
-        self,
-        input_dim: int,
-        global_cond_dim: int,
-        diffusion_step_embed_dim: int = 256,
-        down_dims: list[int] | None = None,
-        kernel_size: int = 5,
-        n_groups: int = 8,
-    ):
+class Upsample1d(nn.Module):
+    """
+    Transposed-conv 1D upsampling layer with optional size correction.
+
+    Uses a ConvTranspose1d with kernel_size=4, stride=2, and padding=1 to
+    approximately double the temporal length while keeping channel count the
+    same. If a specific output length is required, set `target_length` and the
+    result is linearly interpolated to match exactly.
+
+    Args:
+        ch (int): Number of input/output channels.
+
+    Input:
+        x (Tensor): Input of shape (B, ch, T).
+        target_length (int, optional): Desired final temporal length.
+
+    Output:
+        Tensor: Upsampled tensor of shape (B, ch, ~2T) or (B, ch, target_length).
+    """
+
+    def __init__(self, ch: int):
         super().__init__()
-        down_dims = list(down_dims or [256, 512, 1024])
-        self.input_dim = input_dim
-
-        self.diffusion_step_encoder = nn.Sequential(
-            SinusoidalPosEmb(diffusion_step_embed_dim),
-            nn.Linear(diffusion_step_embed_dim, diffusion_step_embed_dim * 4),
-            nn.Mish(),
-            nn.Linear(diffusion_step_embed_dim * 4, diffusion_step_embed_dim),
-        )
-        cond_dim = diffusion_step_embed_dim + global_cond_dim
-
-        self.input_conv = nn.Conv1d(input_dim, down_dims[0], kernel_size=1)
-
-        self.down_modules = nn.ModuleList()
-        prev_dim = down_dims[0]
-        for idx, dim_out in enumerate(down_dims):
-            self.down_modules.append(
-                nn.ModuleList(
-                    [
-                        ConditionalResidualBlock1D(
-                            prev_dim, dim_out, cond_dim, kernel_size, n_groups
-                        ),
-                        ConditionalResidualBlock1D(
-                            dim_out, dim_out, cond_dim, kernel_size, n_groups
-                        ),
-                        (
-                            Downsample1d(dim_out)
-                            if idx < len(down_dims) - 1
-                            else nn.Identity()
-                        ),
-                    ]
-                )
-            )
-            prev_dim = dim_out
-
-        self.mid_modules = nn.ModuleList(
-            [
-                ConditionalResidualBlock1D(
-                    down_dims[-1], down_dims[-1], cond_dim, kernel_size, n_groups
-                ),
-                ConditionalResidualBlock1D(
-                    down_dims[-1], down_dims[-1], cond_dim, kernel_size, n_groups
-                ),
-            ]
-        )
-
-        self.up_modules = nn.ModuleList()
-        for idx, dim_out in enumerate(reversed(down_dims[:-1])):
-            dim_in = down_dims[-(idx + 1)]
-            self.up_modules.append(
-                nn.ModuleList(
-                    [
-                        ConditionalResidualBlock1D(
-                            dim_in + dim_out, dim_out, cond_dim, kernel_size, n_groups
-                        ),
-                        ConditionalResidualBlock1D(
-                            dim_out, dim_out, cond_dim, kernel_size, n_groups
-                        ),
-                        Upsample1d(dim_out),
-                    ]
-                )
-            )
-
-        self.final_conv = nn.Sequential(
-            Conv1dBlock(down_dims[0], down_dims[0], kernel_size, n_groups=n_groups),
-            nn.Conv1d(down_dims[0], input_dim, kernel_size=1),
-        )
+        self.up = nn.ConvTranspose1d(ch, ch, kernel_size=4, stride=2, padding=1)
 
     def forward(
-        self,
-        sample: torch.Tensor,
-        timestep: torch.Tensor,
-        global_cond: torch.Tensor,
+        self, x: torch.Tensor, target_length: int | None = None
     ) -> torch.Tensor:
-        if global_cond is None:
-            raise ValueError(
-                "global_cond must be provided to ConditionalUnet1D forward"
-            )
+        x = self.up(x)
+        if target_length is not None and x.shape[-1] != target_length:
+            x = F.interpolate(x, size=target_length, mode="linear", align_corners=True)
+        return x
 
-        seq_len = sample.size(-2) if sample.dim() >= 2 else sample.size(-1)
-        x = sample.moveaxis(-1, -2)
-        if not torch.is_tensor(timestep):
-            timestep = torch.tensor([timestep], dtype=torch.long, device=x.device)
-        elif timestep.ndim == 0:
-            timestep = timestep.unsqueeze(0)
-        timestep = timestep.to(x.device)
-        timestep = timestep.expand(x.size(0))
-        time_emb = self.diffusion_step_encoder(timestep)
 
-        global_feature = torch.cat([time_emb, global_cond], dim=-1)
+class ImageEncoder(nn.Module):
+    """
+    ResNet18 image encoder producing a fixed-size embedding.
 
-        h: list[torch.Tensor] = []
-        x = self.input_conv(x)
-        for idx, (res1, res2, downsample) in enumerate(self.down_modules):
-            x = res1(x, global_feature)
-            x = res2(x, global_feature)
-            x = downsample(x)
-            if idx < len(self.down_modules) - 1:
-                h.append(x)
+    Uses torchvision's ResNet18 backbone (ImageNet weights when available)
+    and maps the 512-d pooled feature to `out_dim`.
 
-        for mid in self.mid_modules:
-            x = mid(x, global_feature)
+    Input:
+        x (Tensor): (B, 3, H, W) image tensor normalized to ImageNet stats
+            (mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]).
 
-        for res1, res2, upsample in self.up_modules:
-            skip = h.pop()
+    Output:
+        Tensor: Image features of shape (B, out_dim).
+    """
+
+    def __init__(
+        self,
+        out_dim: int = 256,
+        freeze_backbone: bool = True,
+        trainable_layers: tuple[str, ...] | None = ("layer4",),
+        bn_eval: bool = True,
+    ):
+        super().__init__()
+        if "ResNet18_Weights" in globals() and ResNet18_Weights is not None:
+            backbone = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+        else:
+            backbone = resnet18(pretrained=True)
+        backbone.fc = nn.Identity()
+        self.backbone = backbone
+        self.head = nn.Sequential(
+            nn.Linear(512, out_dim),
+            nn.ReLU(),
+        )
+        # freezing policy
+        if freeze_backbone:
+            for p in self.backbone.parameters():
+                p.requires_grad = False
+            if trainable_layers is not None:
+                for name in trainable_layers:
+                    module = getattr(self.backbone, name, None)
+                    if module is not None:
+                        for p in module.parameters():
+                            p.requires_grad = True
+        self._bn_eval = bool(bn_eval)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Encode images into a compact feature vector."""
+        feats = self.backbone(x)
+        return self.head(feats)
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        # keep BN layers in eval to avoid running stats drift if requested
+        if self._bn_eval:
+            for m in self.backbone.modules():
+                if isinstance(m, (nn.BatchNorm2d, nn.SyncBatchNorm)):
+                    m.eval()
+        return self
+
+
+class JointStateEncoder(nn.Module):
+    """
+    MLP encoder for low-dimensional robot states or joint vectors.
+
+    Applies two Linear+ReLU layers to map `in_dim`-D inputs to `out_dim`-D
+    features used to condition the diffusion model.
+
+    Input:
+        x (Tensor): (B, in_dim) state tensor.
+
+    Output:
+        Tensor: Encoded state of shape (B, out_dim).
+    """
+
+    def __init__(self, in_dim: int, out_dim: int = 128):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(in_dim, out_dim),
+            nn.ReLU(),
+            nn.Linear(out_dim, out_dim),
+            nn.ReLU(),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Encode joint/state vector to a fixed-size embedding."""
+        return self.net(x)
+
+
+class UNet1D(nn.Module):
+    """
+    1D UNet backbone for predicting noise over action sequences.
+
+    Consumes a noisy action window and conditioning vector and predicts the
+    per-step noise (epsilon). Uses residual Conv1d blocks with down/upsampling,
+    skip connections, and MLPs for time/condition embeddings.
+
+    Args:
+        action_dim (int): Per-step action dimensionality.
+        window_size (int): Temporal length of the input sequence.
+        base_ch (int): Base number of channels.
+        channel_mult (tuple[int,...]): Channel multipliers per level.
+        time_emb_dim (int): Time-step embedding dimension.
+        cond_dim (int): Conditioning vector dimension.
+    """
+
+    def __init__(
+        self,
+        action_dim: int = 7,
+        window_size: int = 24,
+        base_ch: int = 64,
+        channel_mult: tuple[int, ...] = (1, 2, 4),
+        time_emb_dim: int = 128,
+        cond_dim: int = 512,
+    ):
+        super().__init__()
+        self.action_dim = action_dim
+        self.window_size = window_size
+        self.base_ch = base_ch
+
+        # initial proj: actions (B, T, D) -> (B, C, T)
+        self.input_proj = nn.Conv1d(action_dim, base_ch, kernel_size=1)
+
+        # time & condition projection
+        self.time_mlp = nn.Sequential(
+            SinusoidalPosEmb(time_emb_dim),
+            nn.Linear(time_emb_dim, time_emb_dim * 2),
+            nn.SiLU(),
+            nn.Linear(time_emb_dim * 2, time_emb_dim),
+        )
+        self.cond_mlp = nn.Sequential(
+            nn.Linear(cond_dim + time_emb_dim, base_ch),
+            nn.SiLU(),
+            nn.Linear(base_ch, base_ch),
+        )
+
+        # build encoder blocks
+        chs: list[int] = [base_ch * m for m in channel_mult]
+        self.enc_blocks = nn.ModuleList()
+        self.downs = nn.ModuleList()
+        in_ch = base_ch
+        self.skip_channels = []
+        for out_ch in chs:
+            self.enc_blocks.append(ResidualConv1d(in_ch, out_ch))
+            self.downs.append(Downsample1d(out_ch))
+            self.skip_channels.append(out_ch)
+            in_ch = out_ch
+
+        # middle
+        self.mid1 = ResidualConv1d(in_ch, in_ch * 1)
+        self.mid2 = ResidualConv1d(in_ch * 1, in_ch * 1)
+
+        # build decoder blocks (reverse)
+        self.ups = nn.ModuleList()
+        self.dec_blocks = nn.ModuleList()
+        for skip_ch in reversed(self.skip_channels):
+            self.ups.append(Upsample1d(in_ch))
+            self.dec_blocks.append(ResidualConv1d(in_ch + skip_ch, skip_ch))
+            in_ch = skip_ch
+
+        self.final_conv = nn.Sequential(
+            nn.Conv1d(base_ch, base_ch, kernel_size=3, padding=1),
+            nn.SiLU(),
+            nn.Conv1d(base_ch, action_dim, kernel_size=1),
+        )
+
+    def forward(self, noisy_actions, timesteps, cond_vec, injections=None):
+        """
+        Predict diffusion noise for a noisy action sequence.
+
+        Args:
+            noisy_actions (Tensor): Noisy actions of shape (B, T, D).
+            timesteps (Tensor): Time-step indices of shape (B,).
+            cond_vec (Tensor): Conditioning vector of shape (B, cond_dim).
+            injections (tuple|list|None): Optional per-level feature maps
+                (B, C, T) to inject in the encoder.
+
+        Returns:
+            Tensor: Predicted noise of shape (B, T, D).
+        """
+        B, T, D = noisy_actions.shape
+        x = noisy_actions.permute(0, 2, 1).contiguous()  # (B, action_dim, T)
+        x = self.input_proj(x)
+
+        # project time + condition to base channel size
+        t_emb = self.time_mlp(timesteps)  # (B, time_emb_dim)
+        cond = torch.cat([t_emb, cond_vec], dim=-1)  # (B, cond_dim+time_dim)
+        cond_feat = self.cond_mlp(cond)[:, :, None]  # (B, base_ch, 1)
+
+        # inject condition once at input
+        x = x + cond_feat
+
+        skips = []
+        # encoder
+        for idx, enc in enumerate(self.enc_blocks):
+            x = enc(x)
+            if (
+                injections is not None
+                and idx < len(injections)
+                and injections[idx] is not None
+            ):
+                inj = injections[idx]
+                if inj.shape[-1] != x.shape[-1]:
+                    inj = F.interpolate(
+                        inj, size=x.shape[-1], mode="linear", align_corners=True
+                    )
+                x = x + inj
+            skips.append(x)
+            x = self.downs[idx](x)
+
+        # mid
+        x = self.mid1(x)
+        x = self.mid2(x)
+
+        # decoder
+        for idx, (up, dec) in enumerate(zip(self.ups, self.dec_blocks)):
+            skip = skips.pop()
+            x = up(x, target_length=skip.shape[-1])
             x = torch.cat([x, skip], dim=1)
-            x = res1(x, global_feature)
-            x = res2(x, global_feature)
-            x = upsample(x)
-
-        # Ensure we have the same temporal length as input
-        if x.size(-1) > seq_len:
-            x = x[..., :seq_len]
-        elif x.size(-1) < seq_len:
-            pad = seq_len - x.size(-1)
-            x = torch.nn.functional.pad(x, (0, pad))
+            x = dec(x)
 
         x = self.final_conv(x)
-        return x.moveaxis(-1, -2)
+        x = x.permute(0, 2, 1).contiguous()  # (B, T, action_dim)
 
-
-def _get_activation(name: str | None) -> nn.Module:
-    if name is None:
-        return nn.Identity()
-    name = name.lower()
-    if name in {"relu", "relu6"}:
-        return nn.ReLU(inplace=True)
-    if name == "gelu":
-        return nn.GELU()
-    if name in {"silu", "swish"}:
-        return nn.SiLU(inplace=True)
-    if name == "mish":
-        return nn.Mish()
-    if name == "tanh":
-        return nn.Tanh()
-    if name == "elu":
-        return nn.ELU(inplace=True)
-    raise ValueError(f"Unsupported activation '{name}'.")
-
-
-def _get_norm(norm_type: str | None, num_features: int) -> nn.Module:
-    if norm_type is None:
-        return nn.Identity()
-    norm_type = norm_type.lower()
-    if norm_type in {"batchnorm", "batch", "bn"}:
-        return nn.BatchNorm2d(num_features)
-    if norm_type in {
-        "layernorm",
-        "layer",
-        "ln",
-    }:  # TODO check layer norma and Group norm
-        return nn.GroupNorm(1, num_features)
-    if norm_type in {"groupnorm", "group", "gn"}:
-        groups = 32 if num_features % 32 == 0 else 8
-        return nn.GroupNorm(groups, num_features)
-    raise ValueError(f"Unsupported normalization '{norm_type}'.")
-
-
-class TimeDistributedMLP(nn.Module):
-    def __init__(
-        self,
-        input_dim: int,
-        hidden_dims: list[int] | None = None,
-        output_dim: int | None = None,
-        activation: str = "gelu",
-        dropout: float = 0.0,
-        use_layer_norm: bool = False,
-    ):
-        super().__init__()
-        dims = [input_dim]
-        hidden_dims = list(hidden_dims or [])
-        dims.extend(hidden_dims)
-        if output_dim is not None:
-            dims.append(output_dim)
-        layers: list[nn.Module] = []
-        for in_dim, out_dim in zip(dims[:-1], dims[1:]):
-            layers.append(nn.Linear(in_dim, out_dim))
-            if use_layer_norm:
-                layers.append(nn.LayerNorm(out_dim))
-            layers.append(_get_activation(activation))
-            if dropout > 0:
-                layers.append(nn.Dropout(dropout))
-        self.net = nn.Sequential(*layers) if layers else nn.Identity()
-        self.output_dim = dims[-1]
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        original_shape = x.shape
-        x = x.reshape(-1, original_shape[-1])
-        x = self.net(x)
-        return x.reshape(*original_shape[:-1], self.output_dim)
-
-
-class VisualEncoder(nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        conv_channels: list[int],
-        kernel_sizes: int | list[int] = 3,
-        strides: int | list[int] = 2,
-        activation: str = "silu",
-        norm: str = "layernorm",
-        dropout: float = 0.0,
-        global_pool: bool = True,
-    ):
-        super().__init__()
-        channels = list(conv_channels)
-        if isinstance(kernel_sizes, int):
-            kernel_sizes = [kernel_sizes] * len(channels)
-        if isinstance(strides, int):
-            strides = [strides] * len(channels)
-        if len(kernel_sizes) != len(channels) or len(strides) != len(channels):
-            raise ValueError("kernel_sizes and strides must match conv_channels length")
-        blocks: list[nn.Module] = []
-        curr_in = in_channels
-        for idx, out_channels in enumerate(channels):
-            kernel = kernel_sizes[idx]
-            stride = strides[idx]
-            padding = kernel // 2
-            blocks.append(
-                nn.Conv2d(
-                    curr_in,
-                    out_channels,
-                    kernel_size=kernel,
-                    stride=stride,
-                    padding=padding,
+        if x.shape[1] != T:
+            x = (
+                F.interpolate(
+                    x.permute(0, 2, 1), size=T, mode="linear", align_corners=True
                 )
+                .permute(0, 2, 1)
+                .contiguous()
             )
-            blocks.append(_get_norm(norm, out_channels))
-            blocks.append(_get_activation(activation))
-            if dropout > 0:
-                blocks.append(nn.Dropout2d(dropout))
-            curr_in = out_channels
-        self.body = nn.Sequential(*blocks) if blocks else nn.Identity()
-        self.global_pool = global_pool
-        self.pool = nn.AdaptiveAvgPool2d(1) if global_pool else nn.Identity()
-        self.output_dim = curr_in
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.body(x)
-        x = self.pool(x)
-        return x.flatten(1)
+        return x
 
 
-class TemporalTransformerEncoder(nn.Module):
-    def __init__(
-        self,
-        input_dim: int,
-        hidden_dim: int,
-        num_layers: int,
-        num_heads: int,
-        dropout: float,
-        max_seq_len: int,
-        add_time_embedding: bool = True,
-    ):
+class TransitionBranch(nn.Module):
+    """
+    Auxiliary encoder that produces injection features from past actions.
+
+    Mirrors UNet encoder levels and maps outputs through zero-initialized
+    1x1 convs to allow safe residual injection without disrupting initial
+    behavior.
+    """
+
+    def __init__(self, unet: UNet1D):
         super().__init__()
-        self.add_time_embedding = add_time_embedding
-        if input_dim != hidden_dim:
-            self.input_proj = nn.Linear(input_dim, hidden_dim)
-        else:
-            self.input_proj = nn.Identity()
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=hidden_dim,
-            nhead=num_heads,
-            dim_feedforward=hidden_dim * 4,
-            dropout=dropout,
-            activation="gelu",
-            batch_first=True,
-            norm_first=True,
+        # Derive channel sizes from enc_blocks
+        enc_chs = [b.conv1.out_channels for b in unet.enc_blocks]
+
+        base_in = unet.action_dim
+        # create encoder-like blocks that map past action windows -> feature maps
+        self.encs: nn.ModuleList = nn.ModuleList()
+        for i, ch in enumerate(enc_chs):
+            in_ch = base_in if i == 0 else enc_chs[i - 1]
+            # use ResidualConv1d blocks for processing
+            self.encs.append(ResidualConv1d(in_ch, ch))
+
+        # Create downsample modules to mirror UNet downs
+        self.downs: nn.ModuleList = nn.ModuleList([Downsample1d(ch) for ch in enc_chs])
+
+        # Zero convs to map produced features to target encoder feature channels
+        # injection targets are the corresponding UNet encoder outputs (same channels)
+        self.zero_convs: nn.ModuleList = nn.ModuleList(
+            [ZeroConv1d(ch, ch) for ch in enc_chs]
         )
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        if add_time_embedding:
-            position = torch.arange(max_seq_len).float()
-            div_term = torch.exp(
-                torch.arange(0, hidden_dim, 2).float()
-                * (-math.log(10000.0) / hidden_dim)
-            )
-            pe = torch.zeros(max_seq_len, hidden_dim)
-            pe[:, 0::2] = torch.sin(position[:, None] * div_term)
-            pe[:, 1::2] = torch.cos(position[:, None] * div_term)
-            self.register_buffer("positional_encoding", pe, persistent=False)
-        self.output_dim = hidden_dim
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.input_proj(x)
-        if self.add_time_embedding:
-            pe = self.positional_encoding[: x.size(1)].unsqueeze(0)
-            x = x + pe
-        return self.encoder(x)
+    def forward(self, past_actions: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        """
+        Encode past actions into per-level injection tensors.
 
+        Input:
+            past_actions (Tensor): (B, T_past, action_dim).
 
-class TemporalGRUEncoder(nn.Module):
-    def __init__(
-        self,
-        input_dim: int,
-        hidden_dim: int,
-        num_layers: int = 1,
-        bidirectional: bool = False,
-        dropout: float = 0.0,
-    ):
-        super().__init__()
-        self.gru = nn.GRU(
-            input_size=input_dim,
-            hidden_size=hidden_dim,
-            num_layers=num_layers,
-            batch_first=True,
-            bidirectional=bidirectional,
-            dropout=dropout if num_layers > 1 else 0.0,
-        )
-        self.output_dim = hidden_dim * (2 if bidirectional else 1)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        out, _ = self.gru(x)
-        return out
-
-
-class MLP(nn.Module):
-    def __init__(
-        self,
-        input_dim: int,
-        hidden_dims: list[int] = None,
-        activation: str = "gelu",
-        dropout: float = 0.0,
-        use_layer_norm: bool = False,
-    ):
-        super().__init__()
-        hidden_dims = list(hidden_dims or [])
-        dims = [input_dim]
-        dims.extend(hidden_dims)
-        layers: list[nn.Module] = []
-        for idx, (in_dim, out_dim) in enumerate(zip(dims[:-1], dims[1:])):
-            layers.append(nn.Linear(in_dim, out_dim))
-            is_last = idx == len(dims) - 2
-            if not is_last and use_layer_norm:
-                layers.append(nn.LayerNorm(out_dim))
-            if not is_last:
-                layers.append(_get_activation(activation))
-                if dropout > 0:
-                    layers.append(nn.Dropout(dropout))
-        self.net = nn.Sequential(*layers) if layers else nn.Identity()
-        self.output_dim = dims[-1]
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
+        Returns:
+            tuple[Tensor,...]: One tensor per encoder level, each (B, C, T).
+        """
+        # past_actions: (B, T_past, action_dim)
+        x = past_actions.permute(0, 2, 1).contiguous()  # (B, action_dim, T)
+        injections: list[torch.Tensor] = []
+        for enc, down, zconv in zip(self.encs, self.downs, self.zero_convs):
+            x = enc(x)
+            # map to injection shape (B, C, T)
+            inj = zconv(x)
+            injections.append(inj)
+            x = down(x)
+        # return tuple ordered by encoder level (0..L-1)
+        return tuple(injections)
 
 
 @MODELS.register("DiffusionPolicyModel")
 class DiffusionPolicyModel(BasePolicy):
+    """
+    ArkML policy that learns a diffusion model over action sequences.
+
+    Combines observation encoders with a 1D UNet to predict noise and uses
+    a DDPM scheduler for training and sampling.
+    """
+
     def __init__(
         self,
-        action_dim: int,
-        obs_horizon: int,
-        pred_horizon: int,
-        diffusion_steps: int,
-        image_dim: tuple = (3, 480, 640),
-        state_dim: int = 9,  # TODO
-        image_encoder: dict | None = None,
-        state_encoder: dict | None = None,
-        fusion: dict | None = None,
-        condition_head: dict | None = None,
-        unet: dict | None = None,
-        temporal_pooling: str = "flatten",
-        visual_input_features: list[str] | None = None,
+        action_dim: int = 8,
+        window_size: int = 24,
+        base_ch: int = 64,
+        channel_mult: tuple[int, ...] = (1, 2, 4),
+        image_emb_dim: int = 256,
+        joint_emb_dim: int = 128,
+        time_emb_dim: int = 128,
+        diffusion_steps: int = 500,
+        eps: float = 1e-6,
+        # image encoder freeze controls
+        image_freeze_backbone: bool = True,
+        image_trainable_layers: tuple[str, ...] | None = ("layer4",),
+        image_bn_eval: bool = True,
     ):
         super().__init__()
-        self.action_dim = action_dim
-        self.state_dim = state_dim
-        self.obs_horizon = obs_horizon
-        self.pred_horizon = pred_horizon
         self.diffusion_steps = diffusion_steps
-        self.image_dim = image_dim
-        self.temporal_pooling = temporal_pooling.lower()
-
-        image_cfg = dict(image_encoder or {})
-        state_cfg = dict(state_encoder or {})
-        fusion_cfg = dict(fusion or {})
-        condition_cfg = dict(condition_head or {})
-        unet_cfg = dict(unet or {})
-
-        self.visual_input_features = visual_input_features
-        self.use_images = image_cfg.pop("enabled", True)
-
         self.state_key = "state"
+        self.action_dim = action_dim
+        self.window_size = window_size
+        self.eps = eps
+        self.state_std = None
+        self.state_mean = None
+        self.action_std = None
+        self.action_mean = None
 
-        self.image_encoder = None
-        self.image_proj = None
-        image_feature_dim = 0
-        if self.use_images:
-            conv_channels = image_cfg.pop("conv_channels", [32, 64, 128, 256])
-            kernel_sizes = image_cfg.pop("kernel_sizes", [5, 3, 3, 3])
-            strides = image_cfg.pop("strides", [2, 2, 2, 2])
-            activation = image_cfg.pop("activation", "silu")
-            norm = image_cfg.pop("norm", "layernorm")
-            dropout = image_cfg.pop("dropout", 0.0)
-            global_pool = image_cfg.pop("global_pool", True)
-            self.image_encoder = VisualEncoder(
-                in_channels=self.image_dim[0],
-                conv_channels=conv_channels,
-                kernel_sizes=kernel_sizes,
-                strides=strides,
-                activation=activation,
-                norm=norm,
-                dropout=dropout,
-                global_pool=global_pool,
-            )
-            proj_dim = image_cfg.pop("proj_dim")
-            if proj_dim is not None:
-                self.image_proj = nn.Linear(self.image_encoder.output_dim, proj_dim)
-                image_feature_dim = proj_dim
-            else:
-                self.image_proj = nn.Identity()
-                image_feature_dim = self.image_encoder.output_dim
-
-        hidden_dims = state_cfg.pop("hidden_dims", [128, 128])
-        output_dim = state_cfg.pop("output_dim")
-        activation = state_cfg.pop("activation", "gelu")
-        dropout = state_cfg.pop("dropout", 0.0)
-        use_layer_norm = state_cfg.pop("use_layer_norm", False)
-        self.state_encoder = TimeDistributedMLP(
-            input_dim=self.state_dim,
-            hidden_dims=hidden_dims,
-            output_dim=output_dim,
-            activation=activation,
-            dropout=dropout,
-            use_layer_norm=use_layer_norm,
+        cond_dim = image_emb_dim + joint_emb_dim
+        self.image_enc = ImageEncoder(
+            out_dim=image_emb_dim,
+            freeze_backbone=image_freeze_backbone,
+            trainable_layers=image_trainable_layers,
+            bn_eval=image_bn_eval,
         )
-        state_feature_dim = self.state_encoder.output_dim
+        self.joint_enc = JointStateEncoder(in_dim=action_dim, out_dim=joint_emb_dim)
 
-        per_step_feature_dim = image_feature_dim + state_feature_dim
-
-        fusion_type = fusion_cfg.pop("type", "transformer").lower()
-        if fusion_type == "transformer":
-            hidden_dim = fusion_cfg.pop("hidden_dim", 512)
-            num_layers = fusion_cfg.pop("num_layers", 2)
-            num_heads = fusion_cfg.pop("num_heads", 8)
-            dropout = fusion_cfg.pop("dropout", 0.1)
-            add_time_embedding = fusion_cfg.pop("add_time_embedding", True)
-            self.temporal_encoder = TemporalTransformerEncoder(
-                input_dim=per_step_feature_dim,
-                hidden_dim=hidden_dim,
-                num_layers=num_layers,
-                num_heads=num_heads,
-                dropout=dropout,
-                max_seq_len=obs_horizon,
-                add_time_embedding=add_time_embedding,
-            )
-            fusion_output_dim = self.temporal_encoder.output_dim
-        elif fusion_type == "gru":
-            hidden_dim = fusion_cfg.pop("hidden_dim", 512)
-            num_layers = fusion_cfg.pop("num_layers", 1)
-            bidirectional = fusion_cfg.pop("bidirectional", False)
-            dropout = fusion_cfg.pop("dropout", 0.0)
-            self.temporal_encoder = TemporalGRUEncoder(
-                input_dim=per_step_feature_dim,
-                hidden_dim=hidden_dim,
-                num_layers=num_layers,
-                bidirectional=bidirectional,
-                dropout=dropout,
-            )
-            fusion_output_dim = self.temporal_encoder.output_dim
-        elif fusion_type in {"none", "identity"}:
-            self.temporal_encoder = None
-            fusion_output_dim = per_step_feature_dim
-        else:
-            raise ValueError(f"Unsupported fusion type '{fusion_type}'.")
-
-        condition_hidden = condition_cfg.pop("hidden_dims", [512])
-        condition_activation = condition_cfg.pop("activation", "gelu")
-        condition_dropout = condition_cfg.pop("dropout", 0.0)
-        condition_layer_norm = condition_cfg.pop("use_layer_norm", True)
-        condition_output = condition_cfg.pop("output_dim", 512)
-        mlp_dims = list(condition_hidden) + [condition_output]
-        self.condition_head = MLP(
-            input_dim=self._pooled_dim(fusion_output_dim),
-            hidden_dims=mlp_dims,
-            activation=condition_activation,
-            dropout=condition_dropout,
-            use_layer_norm=condition_layer_norm,
+        self.unet = UNet1D(
+            action_dim=action_dim,
+            window_size=window_size,
+            base_ch=base_ch,
+            channel_mult=channel_mult,
+            time_emb_dim=time_emb_dim,
+            cond_dim=cond_dim,
         )
-        self.global_cond_dim = self.condition_head.output_dim
 
-        unet_cfg.setdefault("input_dim", action_dim)
-        unet_cfg.setdefault("global_cond_dim", self.global_cond_dim)
-        self.noise_pred_net = ConditionalUnet1D(**unet_cfg)
+        self.transition = TransitionBranch(self.unet)
 
-    @property
-    def device(self) -> torch.device:
-        return next(self.parameters()).device
+        # freeze unet weights when training only transition branch
+        self.freeze_unet = False
 
-    def _pooled_dim(self, per_step_dim: int) -> int:
-        if self.temporal_pooling == "flatten":
-            return per_step_dim * self.obs_horizon
-        if self.temporal_pooling in {"mean", "avg", "average", "last"}:
-            return per_step_dim
-        raise ValueError(f"Unsupported temporal pooling '{self.temporal_pooling}'.")
+        # normalization buffers (defaults: identity transform)
+        self.register_buffer("action_mean", torch.zeros(1, 1, action_dim))
+        self.register_buffer("action_std", torch.ones(1, 1, action_dim))
+        self.register_buffer("state_mean", torch.zeros(1, action_dim))
+        self.register_buffer("state_std", torch.ones(1, action_dim))
+
+    def set_normalization_stats(
+        self,
+        action_mean: torch.Tensor | None = None,
+        action_std: torch.Tensor | None = None,
+        state_mean: torch.Tensor | None = None,
+        state_std: torch.Tensor | None = None,
+    ) -> None:
+        """
+        Set normalization stats for actions and state.
+
+        Shapes:
+            action_mean/std: (1, 1, D) or (D,) broadcastable to (B, T, D)
+            state_mean/std: (1, D) or (D,) broadcastable to (B, D)
+        """
+        device = self.device
+        if action_mean is not None:
+            am = action_mean.reshape(1, 1, -1).to(device)
+            self.action_mean = am
+        if action_std is not None:
+            as_ = action_std.reshape(1, 1, -1).to(device)
+            self.action_std = torch.clamp(as_, min=self.eps)
+        if state_mean is not None:
+            sm = state_mean.reshape(1, -1).to(device)
+            self.state_mean = sm
+        if state_std is not None:
+            ss = state_std.reshape(1, -1).to(device)
+            self.state_std = torch.clamp(ss, min=self.eps)
+
+    def _norm_actions(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Normalize action vectors using dataset statistics.
+        Args:
+            x: Action tensor of shape (..., action_dim).
+
+        Returns:
+            Normalized actions of the same shape as `x`.
+
+        """
+        return (x - self.action_mean) / (self.action_std + self.eps)
+
+    def _denorm_actions(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Denormalize action vectors back to the original scale.
+        Args:
+            x: Normalized action tensor of shape (..., action_dim).
+
+        Returns:
+            Denormalized actions of the same shape as `x`.
+        """
+        return x * (self.action_std + self.eps) + self.action_mean
+
+    def _norm_state(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Normalize state vectors using dataset statistics.
+        Args:
+            x: State tensor of shape (..., state_dim).
+
+        Returns:
+            Normalized states of the same shape as `x`.
+        """
+        return (x - self.state_mean) / (self.state_std + self.eps)
 
     def _prepare_image(self, obs_dict: dict[str, Any]) -> torch.Tensor | None:
-        if not self.use_images or self.image_encoder is None:
-            return None
-        if self.visual_input_features[0] not in obs_dict:
-            raise KeyError(
-                f"Missing image key '{self.visual_input_features}' in observation."
-            )
-        images = obs_dict[self.visual_input_features[0]].to(self.device)
-        if not isinstance(images, torch.Tensor):
-            raise ValueError(
-                f"Expected image to be of type torch.Tensor, but got {type(images)}."
-            )
+        """
+        Extract and preprocess the latest image from observation dict.
 
-        if images.dim() != 5:
-            raise ValueError(
-                f"Expected images in (B, T, C, H, W) format, got {tuple(images.shape)}"
+        If images include a time dimension (B, T, C, H, W), selects the last
+        frame. Returns a tensor on the current device.
+        """
+        encoded_per_camera: list[torch.Tensor] = []
+        for key in ArkMLContext.visual_input_features:
+            if key not in obs_dict:
+                raise KeyError(f"Missing image key '{key}' in observation.")
+            images = obs_dict[key]
+            if not isinstance(images, torch.Tensor):
+                raise ValueError(
+                    f"Expected image '{key}' to be torch.Tensor, received {type(images)}."
+                )
+            # TODO here it takes latest image,
+            #  if the policy to see a history of frames then encode images separately and fuse it or similar method
+            if images.dim() == 5:
+                image = images[:, -1]
+            else:
+                image = images
+
+            image = image.to(self.device, dtype=torch.float32, non_blocking=True)
+            # Expect inputs in [0,1]; clamp and normalize to ImageNet stats
+            image = torch.clamp(image, 0.0, 1.0)
+            imagenet_mean = torch.tensor(
+                [0.485, 0.456, 0.406], device=self.device
+            ).view(1, 3, 1, 1)
+            imagenet_std = torch.tensor([0.229, 0.224, 0.225], device=self.device).view(
+                1, 3, 1, 1
             )
-        b, t, c, h, w = images.shape
-        encoded = self.image_encoder(images.view(b * t, c, h, w))
-        encoded = self.image_proj(encoded)
-        return encoded.view(b, t, -1)
+            image = (image - imagenet_mean) / imagenet_std
+            return image
+
+        return torch.cat(encoded_per_camera, dim=-1) if encoded_per_camera else None
 
     def _prepare_state(self, obs_dict: dict[str, Any]) -> torch.Tensor:
+        """
+        Extract and preprocess the latest state vector from observation dict.
+
+        If states include a time dimension (B, T, D), selects the last step.
+        Returns a tensor on the current device.
+        """
         if self.state_key not in obs_dict:
             raise KeyError(f"Missing state key '{self.state_key}' in observation.")
-        state = obs_dict[self.state_key].to(self.device)
+        state = obs_dict[self.state_key].to(self.device, non_blocking=True)
         if not isinstance(state, torch.Tensor):
             raise ValueError(
                 f"Expected state to be of type torch.Tensor, but got {type(state)}."
             )
-        if state.dim() != 3:
-            raise ValueError(
-                f"Expected state in (B, T, D) format, got {tuple(state.shape)}"
-            )
-        return self.state_encoder(state)
+        # TODO here it takes latest state,
+        #  if the policy to see a history of states then change accordingly
+        if state.dim() == 3:
+            state = state[:, -1]
+
+        # normalize state
+        state = state.to(torch.float32)
+        state = self._norm_state(state)
+        return state
 
     def encode_observations(self, obs: dict[str, Any]) -> torch.Tensor:
+        """
+        Encode observations into a conditioning vector for the UNet.
+
+        Concatenates image and state encodings into a single tensor
+        of shape (B, image_emb_dim + joint_emb_dim).
+        """
         if isinstance(obs, dict):
             image_features = self._prepare_image(obs)
             state_features = self._prepare_state(obs)
-            features = []
-            if image_features is not None:
-                features.append(image_features)
-            if state_features is not None:
-                features.append(state_features)
-            if not features:
-                raise ValueError("No features extracted from observations.")
-            fused = torch.cat(features, dim=-1)
+            img_e = self.image_enc(image_features)  # (B, image_emb_dim)
+            j_e = self.joint_enc(state_features)  # (B, joint_emb_dim)
+            cond_vec = torch.cat([img_e, j_e], dim=-1)
+            return cond_vec
         else:
             raise ValueError(f"Expected observation to be a dict but got {type(obs)}")
 
-        if fused.size(1) != self.obs_horizon:
-            raise ValueError(
-                f"Observation horizon mismatch. Expected {self.obs_horizon}, received {fused.size(1)}"
+    def _predict_noise(self, sample, timesteps, cond, past_actions=None):
+        """
+        Predict noise using UNet with optional past-action injections.
+
+        Moves inputs to the correct device and forwards through UNet.
+        """
+        device = self.device
+
+        # ensure everything is on the same device
+        sample = sample.to(device)
+        timesteps = timesteps.to(device)
+        cond = cond.to(device)
+
+        injections = None
+        if past_actions is not None:
+            past_actions = past_actions.to(device)
+            # normalize past actions before computing injections
+            past_actions = self._norm_actions(past_actions)
+            injections = self.transition(past_actions)
+            injections = (
+                [inj.to(device) for inj in injections]
+                if isinstance(injections, (list, tuple))
+                else injections
             )
-        if self.temporal_encoder is not None:
-            fused = self.temporal_encoder(fused)
-        if self.temporal_pooling == "flatten":
-            pooled = fused.reshape(fused.size(0), -1)
-        elif self.temporal_pooling in {"mean", "avg", "average"}:
-            pooled = fused.mean(dim=1)
-        elif self.temporal_pooling == "last":
-            pooled = fused[:, -1]
-        else:
-            raise ValueError(f"Unsupported temporal pooling '{self.temporal_pooling}'.")
-        return self.condition_head(pooled)
+
+        return self.unet(sample, timesteps, cond, injections=injections)
 
     def forward(
-        self, sample: torch.Tensor, timestep: torch.Tensor, obs: dict[str, Any] = None
-    ) -> torch.Tensor:
-        sample = sample.float()
-        global_cond = self.encode_observations(obs)
-        return self.noise_pred_net(sample, timestep, global_cond=global_cond)
+        self, obs: dict[str, Any], scheduler
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Training step: diffuse actions and predict noise.
+
+        Samples random noise and timesteps, diffuses current actions, encodes
+        observations, and computes MSE loss on predicted noise.
+
+        Returns:
+            (noise_pred, loss)
+        """
+
+        curr_actions = obs["action"].to(self.device, non_blocking=True)
+        past_actions = obs["past_actions"].to(self.device, non_blocking=True)
+        batch_size = curr_actions.size(0)
+
+        # Sample random Gaussian noise
+        noise = torch.randn_like(curr_actions)
+
+        # Sample random timesteps
+        timesteps = torch.randint(
+            0,
+            scheduler.num_train_timesteps,
+            (batch_size,),
+            device=self.device,
+            dtype=torch.long,
+        )
+
+        # Normalize actions before diffusion
+        curr_actions = curr_actions.to(torch.float32)
+        norm_actions = self._norm_actions(curr_actions)
+        # Create noisy actions using forward diffusion in normalized space
+        noisy_actions = scheduler.add_noise(norm_actions, noise, timesteps)
+
+        # Predict noise with the model
+        cond_vec = self.encode_observations(obs=obs)
+
+        if self.freeze_unet:
+            # disable grad for unet
+            for p in self.unet.parameters():
+                p.requires_grad = False
+
+        noise_pred = self._predict_noise(
+            sample=noisy_actions,
+            timesteps=timesteps,
+            cond=cond_vec,
+            past_actions=past_actions,
+        )
+
+        loss = F.mse_loss(noise_pred, noise.to(noise_pred.device))
+        return noise_pred, loss
+
+    def sample_actions(self, obs: dict[str, Any], scheduler) -> torch.Tensor:
+        """
+        Sample an action sequence by iterative denoising under the scheduler.
+        """
+        self.set_eval_mode()
+        steps = self.diffusion_steps
+        scheduler.set_timesteps(steps)
+
+        # condition from observations
+        cond = self.encode_observations(obs)
+        past_actions = obs["past_actions"]
+        batch_size = cond.size(0)
+
+        # start from Gaussian noise in normalized action space
+        action = torch.randn(
+            (batch_size, self.window_size, self.action_dim),
+            device=self.device,
+        )
+
+        with torch.no_grad():
+            for t in scheduler.timesteps:
+                # timesteps must be a tensor [B]
+                timesteps = torch.full(
+                    (batch_size,), t, device=self.device, dtype=torch.long
+                )
+
+                # UNet predicts noise (epsilon)
+                noise_pred = self._predict_noise(
+                    sample=action,
+                    timesteps=timesteps,
+                    cond=cond,
+                    past_actions=past_actions,
+                )
+                # scheduler updates the action sample
+                action = scheduler.step(
+                    model_output=noise_pred,
+                    timestep=t,
+                    sample=action,
+                ).prev_sample
+        # denormalize back to env action space
+        action = self._denorm_actions(action)
+        return action  # (B, pred_horizon, action_dim)
+
+    def predict(self, obs: dict[str, Any], **kwargs) -> torch.Tensor:
+        actions = self.sample_actions(obs, **kwargs)
+        return actions[:, 0].squeeze(0).detach().cpu().numpy()
 
     def build_scheduler(self):
+        """Construct a default DDPM scheduler used for training and sampling."""
         return DDPMScheduler(
             num_train_timesteps=self.diffusion_steps,
             beta_schedule="squaredcos_cap_v2",
@@ -688,33 +894,41 @@ class DiffusionPolicyModel(BasePolicy):
             prediction_type="epsilon",
         )
 
-    def sample_actions(self, obs: dict[str, Any], scheduler) -> torch.Tensor:
-        self.set_eval_mode()
-        steps = self.diffusion_steps
-        scheduler.set_timesteps(steps)
-        cond = self.encode_observations(obs)
-        batch_size = cond.size(0)
-        action = torch.randn(
-            (batch_size, self.pred_horizon, self.action_dim), device=self.device
-        )
-        with torch.no_grad():
-            for t in scheduler.timesteps:
-                noise_pred = self.noise_pred_net(action, t, global_cond=cond)
-                action = scheduler.step(noise_pred, t, action).prev_sample
-        return action
-
-    def predict(self, obs: dict[str, Any], **kwargs) -> torch.Tensor:
-        actions = self.sample_actions(obs, **kwargs)
-        return actions[:, 0].squeeze(0).detach().cpu().numpy()
-
     def reset(self):
+        """
+        Reset internal policy state.
+        """
         pass
 
     def to_device(self, device: str):
+        """
+        Move the underlying policy to a device and return self.
+        Args:
+            device: Target device identifier (e.g., "cuda", "cpu").
+
+        Returns:
+            This instance, for method chaining.
+
+        """
         return self.to(torch.device(device))
 
     def set_eval_mode(self):
+        """
+        Set the underlying policy to evaluation mode.
+        """
         self.eval()
 
     def set_train_mode(self):
+        """
+        Set the underlying policy to training mode.
+        """
         self.train()
+
+    @property
+    def device(self) -> torch.device:
+        """
+        Device identifier the policy is being on.
+        Returns:
+            Returns the device identifier.
+        """
+        return next(self.parameters()).device

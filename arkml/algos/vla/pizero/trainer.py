@@ -72,7 +72,8 @@ class PiZeroTrainer(Trainer):
         )
 
     def fit(self, *args, **kwargs) -> dict[str, Any]:
-        """Run the training loop and return summary metrics.
+        """
+        Run the training loop and return summary metrics.
 
         Returns:
             A summary dictionary with:

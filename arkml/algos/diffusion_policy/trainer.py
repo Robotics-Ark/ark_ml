@@ -1,25 +1,21 @@
+"""Trainer for diffusion policies with validation-aware checkpointing."""
+
 import copy
 import os
 from datetime import datetime
+from typing import Any
 
 import numpy as np
 import torch
-import torch.nn as nn
 from arkml.core.algorithm import Trainer
 from diffusers.training_utils import EMAModel
+from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
+
+from .evaluator import DiffusionPolicyEvaluator
 
 
 class DiffusionTrainer(Trainer):
-    STATE_KEYS = {
-        "state",
-        "states",
-        "proprio",
-        "proprioception",
-        "agent_pos",
-        "lowdim",
-        "low_dim",
-    }
 
     def __init__(
         self,
@@ -35,9 +31,14 @@ class DiffusionTrainer(Trainer):
         use_ema: bool = True,
         ema_power: float = 0.75,
         grad_clip: float | None = None,
+        *,
+        val_dataloader: DataLoader | None = None,
+        eval_every: int = 1,
     ):
         self.model = model
         self.dataloader = dataloader
+        self.val_dataloader = val_dataloader
+        self.eval_every = max(1, int(eval_every))
         self.device = device
         self.num_epochs = num_epochs
         self.lr = lr
@@ -47,8 +48,6 @@ class DiffusionTrainer(Trainer):
         self.use_ema = use_ema
         self.grad_clip = grad_clip
         self.output_dir = output_dir
-
-        self.noise_scheduler = self.model.build_scheduler()
 
         self.ema = (
             EMAModel(parameters=self.model.parameters(), power=ema_power)
@@ -60,17 +59,25 @@ class DiffusionTrainer(Trainer):
             params=self.model.parameters(), lr=lr, weight_decay=weight_decay
         )
 
-        self.best_loss = float("inf")
+        self.best_metric = float("inf")
+        self.best_metric_name = "train_loss"
+        self.best_ckpt_path: str | None = None
 
-    def save_checkpoint(self, ckpt_dir, epoch_idx, mean_loss):
-        os.makedirs(ckpt_dir, exist_ok=True)  # ensure directory exists
+    def save_checkpoint(
+        self,
+        ckpt_dir: str,
+        epoch_idx: int,
+        metric_value: float,
+        metric_name: str,
+    ) -> None:
+        os.makedirs(ckpt_dir, exist_ok=True)
 
-        def save_model(model, prefix):
+        def save_model(model, prefix: str) -> str:
             filename = f"{prefix}{epoch_idx + 1}.pth"
             path = os.path.join(ckpt_dir, filename)
             torch.save(model.state_dict(), path)
+            return path
 
-        # Always save "latest"
         save_model(self.model, "noise_pred_net_latest")
 
         ema_model = None
@@ -79,15 +86,30 @@ class DiffusionTrainer(Trainer):
             self.ema.copy_to(ema_model.parameters())
             save_model(ema_model, "ema_noise_pred_net_latest")
 
-        # Save "best" if loss improved
-        if mean_loss < self.best_loss:
-            self.best_loss = mean_loss
-            save_model(self.model, "noise_pred_net_best")
-
-            if ema_model is not None:  # reuse already built ema_model
+        if metric_value < self.best_metric:
+            best_prev = self.best_metric
+            self.best_metric = metric_value
+            self.best_metric_name = metric_name
+            self.best_ckpt_path = save_model(self.model, "noise_pred_net_best")
+            if ema_model is not None:
                 save_model(ema_model, "ema_noise_pred_net_best")
+            print(
+                f"[checkpoint] New best {metric_name}: {metric_value:.6f} (prev {best_prev:.6f})"
+            )
 
-    def fit(self) -> dict:
+    def fit(self) -> dict[str, Any]:
+        """
+        Run the training loop and return summary metrics.
+
+        Returns:
+            Training summary.
+        """
+        # Enable cuDNN benchmark to speed up convs for fixed shapes
+        try:
+            torch.backends.cudnn.benchmark = True
+        except Exception:
+            pass
+
         self.model.to(self.device)
         self.model.set_train_mode()
         if self.ema is not None:
@@ -97,34 +119,14 @@ class DiffusionTrainer(Trainer):
         ckpt_dir = os.path.join(self.output_dir, date_str)
         os.makedirs(ckpt_dir, exist_ok=True)
 
-        history = {"loss": []}
+        scheduler = self.model.build_scheduler()
 
         with tqdm(range(self.num_epochs), desc="Epoch") as epoch_bar:
             for epoch_idx in epoch_bar:
                 batch_losses = []
 
                 for batch in tqdm(self.dataloader, desc="Batch", leave=False):
-                    actions = batch["action"].to(self.device)
-                    batch_size = actions.size(0)
-
-                    # Sample noise and time steps
-                    noise = torch.randn_like(actions)
-                    timesteps = torch.randint(
-                        0,
-                        self.noise_scheduler.config.num_train_timesteps,
-                        (batch_size,),
-                        device=self.device,
-                        dtype=torch.long,
-                    )
-
-                    # Forward pass
-                    noisy_actions = self.noise_scheduler.add_noise(
-                        actions, noise, timesteps
-                    )
-                    noise_pred = self.model(noisy_actions, timesteps, obs=batch)
-                    loss = nn.functional.mse_loss(noise_pred, noise)
-
-                    # Backward pass
+                    noise_pred, loss = self.model(obs=batch, scheduler=scheduler)
                     self.optimizer.zero_grad(set_to_none=True)
                     loss.backward()
 
@@ -143,12 +145,39 @@ class DiffusionTrainer(Trainer):
                 mean_loss = (
                     float(np.mean(batch_losses)) if batch_losses else float("inf")
                 )
-                history["loss"].append(mean_loss)
-                epoch_bar.set_postfix({"loss": mean_loss})
 
-                # Save checkpoints
+                val_loss = None
+                if self.val_dataloader is not None and (
+                    (epoch_idx + 1) % self.eval_every == 0
+                ):
+                    self.model.set_eval_mode()
+                    evaluator = DiffusionPolicyEvaluator(
+                        model=self.model,
+                        dataloader=self.val_dataloader,
+                        device=self.device,
+                    )
+                    val_metrics = evaluator.evaluate(self.val_dataloader)
+                    val_loss = float(val_metrics.get("mse_loss", float("inf")))
+                    self.model.set_train_mode()
+
+                metric_value = val_loss if val_loss is not None else mean_loss
+                metric_name = "val_loss" if val_loss is not None else "train_loss"
+
+                postfix = {"train_loss": mean_loss}
+                if val_loss is not None:
+                    postfix["val_loss"] = val_loss
+                epoch_bar.set_postfix(postfix)
+
                 self.save_checkpoint(
-                    ckpt_dir=ckpt_dir, epoch_idx=epoch_idx, mean_loss=mean_loss
+                    ckpt_dir=ckpt_dir,
+                    epoch_idx=epoch_idx,
+                    metric_value=metric_value,
+                    metric_name=metric_name,
                 )
 
-        return history
+        return {
+            "best_metric_name": self.best_metric_name,
+            "best_metric": self.best_metric,
+            "best_ckpt": self.best_ckpt_path,
+            "checkpoint_dir": ckpt_dir,
+        }
