@@ -65,7 +65,7 @@ def sinusoid_2d(
     return pe.view(h * w, dim)  # (HW,D)
 
 
-class ResNet18Tokens(nn.Module)
+class ResNet18Tokens(nn.Module):
     """
     ResNet-18 backbone wrapper that outputs token embeddings with 2D sinusoidal positional encodings.
 
