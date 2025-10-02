@@ -6,6 +6,11 @@ model:
   obs_horizon: 8
   pred_horizon: 16
   action_horizon: 8
+  window_size: 24
+  base_ch: 64
+  image_emb_dim : 256
+  joint_emb_dim : 128
+  time_emb_dim : 128
   diffusion_steps: 500
   model_path: null
   # Image encoder freezing controls
@@ -25,3 +30,4 @@ trainer:
   val_every_n_epochs: 10
   num_workers: 8
   prefetch_factor: 8
+  max_steps : 100000

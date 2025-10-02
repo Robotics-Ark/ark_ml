@@ -584,10 +584,6 @@ class DiffusionPolicyModel(BasePolicy):
         self.action_dim = action_dim
         self.window_size = window_size
         self.eps = eps
-        self.state_std = None
-        self.state_mean = None
-        self.action_std = None
-        self.action_mean = None
 
         cond_dim = image_emb_dim + joint_emb_dim
         self.image_enc = ImageEncoder(
@@ -634,16 +630,16 @@ class DiffusionPolicyModel(BasePolicy):
         """
         device = self.device
         if action_mean is not None:
-            am = action_mean.reshape(1, 1, -1).to(device)
+            am = action_mean.reshape(1, 1, -1).to(device=device, dtype=torch.float32)
             self.action_mean = am
         if action_std is not None:
-            as_ = action_std.reshape(1, 1, -1).to(device)
+            as_ = action_std.reshape(1, 1, -1).to(device=device, dtype=torch.float32)
             self.action_std = torch.clamp(as_, min=self.eps)
         if state_mean is not None:
-            sm = state_mean.reshape(1, -1).to(device)
+            sm = state_mean.reshape(1, -1).to(device=device, dtype=torch.float32)
             self.state_mean = sm
         if state_std is not None:
-            ss = state_std.reshape(1, -1).to(device)
+            ss = state_std.reshape(1, -1).to(device=device, dtype=torch.float32)
             self.state_std = torch.clamp(ss, min=self.eps)
 
     def _norm_actions(self, x: torch.Tensor) -> torch.Tensor:

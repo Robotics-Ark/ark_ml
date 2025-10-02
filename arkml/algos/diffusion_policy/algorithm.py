@@ -1,5 +1,6 @@
 import os
 import sys
+import math
 from typing import Any
 
 import torch
@@ -82,12 +83,23 @@ class DiffusionPolicyAlgorithm(BaseAlgorithm):
         """
         trainer_cfg = self.cfg.algo.trainer
         model_cfg = self.cfg.algo.model
+        # Allow step-based training by mapping a step budget to epochs
+        max_steps = getattr(trainer_cfg, "max_steps", None)
+        num_epochs = trainer_cfg.max_epochs
+        if max_steps is not None:
+            steps_per_epoch = max(1, len(self.train_loader))
+            num_epochs = math.ceil(int(max_steps) / steps_per_epoch)
+            print(
+                f"[DiffusionPolicyAlgorithm] Using step budget: max_steps={max_steps}, "
+                f"steps_per_epoch={steps_per_epoch}, computed_epochs={num_epochs}"
+            )
+
         trainer = DiffusionTrainer(
             model=self.policy,
             dataloader=self.train_loader,
             device=self.device,
             output_dir=str(os.path.join(self.cfg.output_dir, self.alg_name)),
-            num_epochs=trainer_cfg.max_epochs,
+            num_epochs=num_epochs,
             lr=trainer_cfg.lr,
             weight_decay=trainer_cfg.get("weight_decay", 1e-6),
             obs_horizon=model_cfg.obs_horizon,
@@ -95,6 +107,7 @@ class DiffusionPolicyAlgorithm(BaseAlgorithm):
             use_ema=trainer_cfg.get("ema", True),
             ema_power=trainer_cfg.get("ema_power", 0.75),
             grad_clip=trainer_cfg.get("grad_clip", None),
+            max_steps=max_steps,
         )
         return trainer.fit()
 

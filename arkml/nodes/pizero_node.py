@@ -56,7 +56,7 @@ class PiZeroPolicyNode(PolicyNode):
         Returns:
             None
         """
-        self._action_queue.clear()
+        pass
 
     def _callback_text_input(
         self, time_stamp: int, channel_name: str, msg: string_t
@@ -126,13 +126,10 @@ class PiZeroPolicyNode(PolicyNode):
         """
         obs = self.prepare_observation(obs_seq)
 
-        if len(self._action_queue) == 0:
-            with torch.no_grad():
-                actions = self.policy.predict_n_actions(
-                    obs, n_actions=self.n_infer_actions
-                )
+        with torch.no_grad():
+            actions = self.policy.predict_n_actions(
+                obs, n_actions=self.n_infer_actions
+            )
             actions = actions.detach().cpu().numpy()
-            for action in actions:
-                self._action_queue.append(action)
 
-        return self._action_queue.popleft()
+        return actions[0]
