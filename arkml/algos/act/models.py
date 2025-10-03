@@ -8,10 +8,10 @@ from torchvision.models import resnet18, ResNet18_Weights
 
 
 def sinusoid_1d(
-        length: int,
-        dim: int,
-        device: torch.device,
-        dtype: torch.dtype = torch.float32,
+    length: int,
+    dim: int,
+    device: torch.device,
+    dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
     """
     Generate 1D sinusoidal positional encodings.
@@ -28,8 +28,7 @@ def sinusoid_1d(
     pos = torch.arange(length, device=device, dtype=dtype).unsqueeze(1)  # (L,1)
     i = torch.arange(dim, device=device, dtype=dtype).unsqueeze(0)  # (1,D)
     angle_rates = torch.pow(
-        torch.tensor(10000.0, device=device, dtype=dtype),
-        -(2 * (i // 2)) / dim
+        torch.tensor(10000.0, device=device, dtype=dtype), -(2 * (i // 2)) / dim
     )
     angles = pos * angle_rates  # (L,D)
     pe = torch.zeros((length, dim), device=device, dtype=dtype)
@@ -39,11 +38,11 @@ def sinusoid_1d(
 
 
 def sinusoid_2d(
-        h: int,
-        w: int,
-        dim: int,
-        device: torch.device,
-        dtype: torch.dtype = torch.float32,
+    h: int,
+    w: int,
+    dim: int,
+    device: torch.device,
+    dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
     """
     Generate 2D sinusoidal positional encodings.
@@ -59,13 +58,17 @@ def sinusoid_2d(
         Tensor of shape (H*W, D) containing sinusoidal encodings.
     """
     assert dim % 2 == 0, "dim must be even for 2D sinusoidal encoding."
-    pe_h = sinusoid_1d(h, dim // 2, device, dtype)[:, None, :].repeat(1, w, 1)  # (H,W,D/2)
-    pe_w = sinusoid_1d(w, dim // 2, device, dtype)[None, :, :].repeat(h, 1, 1)  # (H,W,D/2)
+    pe_h = sinusoid_1d(h, dim // 2, device, dtype)[:, None, :].repeat(
+        1, w, 1
+    )  # (H,W,D/2)
+    pe_w = sinusoid_1d(w, dim // 2, device, dtype)[None, :, :].repeat(
+        h, 1, 1
+    )  # (H,W,D/2)
     pe = torch.cat([pe_h, pe_w], dim=-1)  # (H,W,D)
     return pe.view(h * w, dim)  # (HW,D)
 
 
-class ResNet18Tokens(nn.Module)
+class ResNet18Tokens(nn.Module):
     """
     ResNet-18 backbone wrapper that outputs token embeddings with 2D sinusoidal positional encodings.
 
@@ -80,21 +83,29 @@ class ResNet18Tokens(nn.Module)
         pretrained: If True, load ImageNet-pretrained ResNet-18 weights.
 
     Shape:
-        - Input: (B, 3, H, W)  
+        - Input: (B, 3, H, W)
         - Output: (B, H*W, d_model)
     """
 
-    def __init__(self,
-                 d_model: int = 512,
-                 freeze_backbone: bool = True,
-                 freeze_bn: bool = True,
-                 pretrained: bool = True, ):
+    def __init__(
+        self,
+        d_model: int = 512,
+        freeze_backbone: bool = True,
+        freeze_bn: bool = True,
+        pretrained: bool = True,
+    ):
         super().__init__()
         base = resnet18(weights=ResNet18_Weights.DEFAULT if pretrained else None)
 
         self.stem = nn.Sequential(
-            base.conv1, base.bn1, base.relu, base.maxpool,
-            base.layer1, base.layer2, base.layer3, base.layer4
+            base.conv1,
+            base.bn1,
+            base.relu,
+            base.maxpool,
+            base.layer1,
+            base.layer2,
+            base.layer3,
+            base.layer4,
         )
 
         self.frozen = bool(freeze_backbone)
@@ -124,12 +135,12 @@ class ResNet18Tokens(nn.Module)
     # Keep BN/backbone in eval even if model.train() is called
     def train(self, mode: bool = True):
         """
-         Override train() to keep backbone frozen in eval mode if required.
+        Override train() to keep backbone frozen in eval mode if required.
 
-         Args:
-             mode: Training mode (True/False).
+        Args:
+            mode: Training mode (True/False).
 
-         """
+        """
         super().train(mode)
         if self.frozen:
             self.stem.eval()
@@ -185,18 +196,18 @@ class ACT(BasePolicy):
     """
 
     def __init__(
-            self,
-            joint_dim: int = 9,
-            action_dim: int = 8,
-            z_dim: int = 32,
-            d_model: int = 512,
-            ffn_dim: int = 3200,
-            nhead: int = 8,
-            enc_layers: int = 4,
-            dec_layers: int = 7,
-            dropout: float = 0.1,
-            max_len: int = 50,
-            pretrained_resnet: bool = True,
+        self,
+        joint_dim: int = 9,
+        action_dim: int = 8,
+        z_dim: int = 32,
+        d_model: int = 512,
+        ffn_dim: int = 3200,
+        nhead: int = 8,
+        enc_layers: int = 4,
+        dec_layers: int = 7,
+        dropout: float = 0.1,
+        max_len: int = 50,
+        pretrained_resnet: bool = True,
     ):
         super().__init__()
         self.d_model = d_model
@@ -208,7 +219,7 @@ class ACT(BasePolicy):
             d_model=d_model,
             freeze_backbone=True,  # <-- freeze the full ResNet
             freeze_bn=True,
-            pretrained=pretrained_resnet
+            pretrained=pretrained_resnet,
         )
 
         # Tokens for joints & z
@@ -277,7 +288,9 @@ class ACT(BasePolicy):
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
 
-    def _fixed_time_pe(self, K: int, device: torch.device | str, dtype: torch.dtype) -> torch.Tensor:
+    def _fixed_time_pe(
+        self, K: int, device: torch.device | str, dtype: torch.dtype
+    ) -> torch.Tensor:
         """Create fixed sinusoidal positional encodings for K time steps.
 
         Args:
@@ -291,7 +304,9 @@ class ACT(BasePolicy):
         """
         return sinusoid_1d(K, self.d_model, device, dtype)
 
-    def infer_posterior(self, action_seq: torch.Tensor, joints: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    def infer_posterior(
+        self, action_seq: torch.Tensor, joints: torch.Tensor, mask: torch.Tensor
+    ) -> torch.Tensor:
         """Compute the CVAE approximate posterior ``q(z | a, joints)``.
 
 
@@ -321,7 +336,11 @@ class ACT(BasePolicy):
         a_tok = self.act_embed(action_seq)  # (B,K,d)
         # steps = torch.arange(K, device=action_seq.device).unsqueeze(0).expand(B, K)
         # a_tok = a_tok + self.step_pos(steps)
-        steps_pe = self._fixed_time_pe(K, action_seq.device, a_tok.dtype).unsqueeze(0).expand(B, K, -1)
+        steps_pe = (
+            self._fixed_time_pe(K, action_seq.device, a_tok.dtype)
+            .unsqueeze(0)
+            .expand(B, K, -1)
+        )
         a_tok = a_tok + steps_pe
         joints_tok = self.joint_embed_for_q(joints).unsqueeze(1)  # (B,1,d)
         seq = torch.cat([joints_tok, a_tok], dim=1)  # (B,1+K,d)
@@ -370,7 +389,9 @@ class ACT(BasePolicy):
         pass
 
     # ----- Build observation memory -----
-    def build_memory(self, image: torch.Tensor, joints: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+    def build_memory(
+        self, image: torch.Tensor, joints: torch.Tensor, z: torch.Tensor
+    ) -> torch.Tensor:
         """
         image:  (B,3,H,W)
         joints: (B,J) or (B,1,J)  <-- we normalize this
@@ -417,7 +438,11 @@ class ACT(BasePolicy):
         """
         B = memory.size(0)
         # steps = torch.arange(K, device=memory.device).unsqueeze(0).expand(B, K)
-        steps_pe = self._fixed_time_pe(K, memory.device, memory.dtype).unsqueeze(0).expand(B, K, -1)
+        steps_pe = (
+            self._fixed_time_pe(K, memory.device, memory.dtype)
+            .unsqueeze(0)
+            .expand(B, K, -1)
+        )
         # tgt = self.tgt_pos(steps)  # (B,K,d)
         tgt = steps_pe
         causal = torch.triu(torch.ones(K, K, device=memory.device), diagonal=1).bool()
@@ -438,7 +463,9 @@ class ACT(BasePolicy):
         return pred, mu, logvar
 
 
-def masked_l1(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+def masked_l1(
+    pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor
+) -> torch.Tensor:
     """
     Masked L1 loss.
 

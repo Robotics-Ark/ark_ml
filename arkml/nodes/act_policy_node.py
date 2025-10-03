@@ -1,13 +1,12 @@
-import torch
-from torchvision import transforms as T
-from typing import Any
-
-from arkml.algos.act.models import ACT
-from arkml.core.policy_node import PolicyNode
 from typing import Any
 
 import numpy as np
 import numpy.typing as npt
+import torch
+from arkml.algos.act.models import ACT
+from arkml.core.app_context import ArkMLContext
+from arkml.core.policy_node import PolicyNode
+from torchvision import transforms as T
 
 
 class TemporalEnsembler:
@@ -29,12 +28,16 @@ class TemporalEnsembler:
         self.coeff = float(coeff)
 
         # keep original field names for compatibility with your reset()
-        self.sum_buf = np.zeros((self.K, self.action_dim), dtype=np.float32)  # numerator
+        self.sum_buf = np.zeros(
+            (self.K, self.action_dim), dtype=np.float32
+        )  # numerator
         self.cnt_buf = np.zeros((self.K,), dtype=np.float32)  # denominator (weights)
 
-    def step_and_get(self,
-                     new_chunk: npt.NDArray[np.floating],
-                     stride: int = 1, ):
+    def step_and_get(
+        self,
+        new_chunk: npt.NDArray[np.floating],
+        stride: int = 1,
+    ):
         """
         Update the ensembler with a new chunk and return the next `stride` actions.
 
@@ -88,35 +91,33 @@ class ActPolicyNode(PolicyNode):
     """
 
     def __init__(
-            self,
-            cfg: Any,
-            device="cpu",
+        self,
+        device="cpu",
     ):
         """
         Returns `actions_to_exec` from predict()
         """
-        model_cfg = cfg.algo.model
+        model_cfg = ArkMLContext.cfg.get("algo").get("model")
         policy = ACT(
-            joint_dim=model_cfg.joint_dim,
-            action_dim=model_cfg.action_dim,
-            z_dim=model_cfg.z_dim,
-            d_model=model_cfg.d_model,
-            ffn_dim=model_cfg.ffn_dim,
-            nhead=model_cfg.nhead,
-            enc_layers=model_cfg.enc_layers,
-            dec_layers=model_cfg.dec_layers,
-            dropout=model_cfg.dropout,
-            max_len=model_cfg.max_len,
+            joint_dim=model_cfg.get("joint_dim"),
+            action_dim=model_cfg.get("action_dim"),
+            z_dim=model_cfg.get("z_dim"),
+            d_model=model_cfg.get("d_model"),
+            ffn_dim=model_cfg.get("ffn_dim"),
+            nhead=model_cfg.get("nhead"),
+            enc_layers=model_cfg.get("enc_layers"),
+            dec_layers=model_cfg.get("dec_layers"),
+            dropout=model_cfg.get("dropout"),
+            max_len=model_cfg.get("max_len"),
         )
 
         super().__init__(
             policy=policy,
             device=device,
-            policy_name=cfg.node_name,
-            global_config=cfg.global_config,
+            policy_name=ArkMLContext.cfg.get("node_name"),
         )
 
-        CKPT_PATH = model_cfg.checkpoint
+        CKPT_PATH = model_cfg.get("model_path")
         ckpt = torch.load(CKPT_PATH, map_location=device)
         policy.load_state_dict(ckpt["model_state_dict"])
         self.stepper_frequency = model_cfg.stepper_frequency
@@ -172,8 +173,8 @@ class ActPolicyNode(PolicyNode):
     @torch.no_grad()
     def _predict_chunk(self, image_np, joints_t, K):
         """
-         Predict a chunk of K actions from image and joint inputs.
-         """
+        Predict a chunk of K actions from image and joint inputs.
+        """
         z_dim = getattr(self.policy, "z_dim", 32)
         z_zero = torch.zeros((1, z_dim), dtype=torch.float32, device=self.device)
 
@@ -203,7 +204,7 @@ class ActPolicyNode(PolicyNode):
             "state": torch.tensor(obs_seq["state"], dtype=torch.float32),
         }
         chunk_pred = self._predict_chunk(
-            obs['image'], obs['state'], self.chunk_size
+            obs["image"], obs["state"], self.chunk_size
         )  # (K, action_dim)
 
         actions_to_exec = self.ensembler.step_and_get(

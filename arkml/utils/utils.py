@@ -3,7 +3,11 @@ import importlib
 import os
 from typing import Any
 
+import numpy as np
+import torch
+from PIL import Image
 from torch import nn
+from torchvision import transforms
 
 
 def _normalise_shape(shape_dim: str) -> tuple:
@@ -84,3 +88,20 @@ def print_trainable_summary(model: nn.Module) -> None:
     print(f"Trainable parameters: {trainable_params:,}")
     print(f"Frozen parameters:    {total_params - trainable_params:,}")
     print("==============================\n")
+
+
+def _image_to_tensor(image_value: Any, transform: transforms = None) -> torch.Tensor:
+    array = np.asarray(image_value)
+    if array.dtype != np.uint8:
+        array_float = array.astype(np.float32)
+        if array_float.max() <= 1.0:
+            array_uint8 = np.clip(array_float * 255.0, 0, 255).astype(np.uint8)
+        else:
+            array_uint8 = np.clip(array_float, 0, 255).astype(np.uint8)
+    else:
+        array_uint8 = array
+
+    transform = transform or transforms.ToTensor()
+
+    image = Image.fromarray(array_uint8)
+    return transform(image)

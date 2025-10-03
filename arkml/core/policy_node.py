@@ -14,16 +14,16 @@ from arkml.utils.schema_io import load_yaml
 from arktypes import flag_t, string_t
 from torch import nn
 
+from arkml.core.app_context import ArkMLContext
+
 
 class PolicyNode(ABC, BaseNode):
     """Abstract base class for policy wrappers with async inference.
 
     Args:
       policy: Underlying policy module to be executed.
+      policy_name: Name of the policy service.
       device: Target device identifier (e.g., ``"cpu"``, ``"cuda"``).
-      observation_unpacking: Function to unpack observations.
-      action_packing: Function to pack actions.
-      global_config: Global configuration path of the simulator or robot
     """
 
     def __init__(
@@ -31,11 +31,10 @@ class PolicyNode(ABC, BaseNode):
         policy: nn.Module,
         policy_name: str,
         device: str,
-        global_config=None,
     ):
-        super().__init__(policy_name, global_config)
+        super().__init__(policy_name, ArkMLContext.cfg["global_config"])
 
-        cfg_dict = load_yaml(config_path=global_config)
+        cfg_dict = ArkMLContext.global_config
 
         if "channel_config" not in cfg_dict:
             raise ValueError("channel_config must not be empty and properly configured")
@@ -111,7 +110,6 @@ class PolicyNode(ABC, BaseNode):
 
     def reset(self) -> None:
         """Reset the internal state of the policy."""
-        # Block publishing immediately and clear any pending action
         self._stop_service = True
         self._resetting = True
         self.observation_space.is_ready = False
@@ -127,8 +125,16 @@ class PolicyNode(ABC, BaseNode):
         _ = self.observation_space.get_observation()
         self._resetting = False
 
-    def _callback_reset_service(self, channel, msg) -> string_t:
-        """Service callback to reset policy state."""
+    def _callback_reset_service(self, channel: str, msg: Any) -> string_t:
+        """
+        Service callback to reset policy state.
+        Args:
+            channel: Service channel id.
+            msg: Message
+
+        Returns:
+            Reset status
+        """
         log.info(f"[INFO] Received callback reset service")
         reset_status = string_t()
         try:
@@ -140,29 +146,64 @@ class PolicyNode(ABC, BaseNode):
             log.error(f"[ERROR] Failed to reset policy state: {e}")
         return reset_status
 
-    def _callback_predict_service(self, channel, msg):
+    def _callback_predict_service(self, channel: str, msg: Any) -> flag_t:
+        """
+        Service callback to predict the next action.
+        Args:
+            channel: Service channel id.
+            msg: Message
+
+        Returns:
+            Returns dummy flag
+        """
         self.get_next_action()
         return flag_t()
 
-    def step_policy(self):
+    def step_policy(self) -> None:
+        """
+        Step function to predict the next action.
+        Returns:
+            None
+        """
         if self._stop_service:
             return
         self.get_next_action()
 
-    def _callback_start_service(self, channel, msg) -> flag_t:
-        """Start policy prediction service"""
+    def _callback_start_service(self, channel: str, msg: Any) -> flag_t:
+        """
+        Start policy prediction .
+        Args:
+            channel: Service channel id.
+            msg: Message
+
+        Returns:
+            Returns dummy flag
+        """
         log.info(f"[INFO] Received callback to start service")
         self._stop_service = False
         return flag_t()
 
-    def _callback_stop_service(self, channel, msg) -> flag_t:
-        """Stop policy prediction service"""
+    def _callback_stop_service(self, channel: str, msg: Any) -> flag_t:
+        """
+        Stop policy prediction service.
+        Args:
+            channel: Service channel id.
+            msg: Message
+
+        Returns:
+            Returns dummy flag
+
+        """
         log.info(f"[INFO] Received callback to stop service")
         self._stop_service = True
         return flag_t()
 
-    def get_next_action(self):
-        """Compute the next action from observations."""
+    def get_next_action(self) -> None:
+        """
+        Compute the next action from observations.
+        Returns:
+            None, Publishes the next action.
+        """
         obs = self.observation_space.get_observation()
         if obs is None:
             log.warning(f"Observation is None")
@@ -176,5 +217,12 @@ class PolicyNode(ABC, BaseNode):
 
     @abstractmethod
     def predict(self, obs_seq: dict[str, Any]) -> np.ndarray:
-        """Compute the action(s) from observations."""
+        """
+        Compute the action(s) from observations.
+        Args:
+            obs_seq: Observation sequence.
+
+        Returns:
+            Predicted next action.
+        """
         ...
