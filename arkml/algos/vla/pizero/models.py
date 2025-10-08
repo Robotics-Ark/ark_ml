@@ -14,6 +14,8 @@ from lerobot.policies.normalize import Normalize, Unnormalize
 from lerobot.policies.pi0.modeling_pi0 import PI0Policy
 from torch import tensor
 
+from arkml.core.app_context import ArkMLContext
+
 
 @MODELS.register("PiZeroNet")
 class PiZeroNet(BasePolicy):
@@ -35,14 +37,12 @@ class PiZeroNet(BasePolicy):
         action_dim: int,
         image_dim: tuple,
         pred_horizon: int = 1,
-        visual_input_features=None,
     ):
         super().__init__()
         self.obs_dim = obs_dim
         self.action_dim = action_dim
         self.image_dim = image_dim
         self.device = None
-        self.visual_input_features = visual_input_features
 
         kind = policy_type.lower()
         if kind != "pi0":
@@ -52,7 +52,7 @@ class PiZeroNet(BasePolicy):
 
         self._policy = policy_class.from_pretrained(model_path)
 
-        self._policy.config.n_action_steps = 1  # pred_horizon TODO
+        self._policy.config.n_action_steps = pred_horizon
         self._load_input_output_features()
 
     def to_device(self, device: str) -> Any:
@@ -115,7 +115,7 @@ class PiZeroNet(BasePolicy):
                 obs["task"] = v
             elif k in {"action", "action_is_pad"}:
                 obs[k] = v.to(self.device)
-            elif k in self.visual_input_features:
+            elif k in ArkMLContext.visual_input_features:
                 obs[f"observation.images.{k}"] = v.to(self.device)
         return obs
 
@@ -242,7 +242,7 @@ class PiZeroNet(BasePolicy):
                 type=FeatureType.STATE, shape=(self.obs_dim,)
             )
         }
-        for cam_name in self.visual_input_features:
+        for cam_name in ArkMLContext.visual_input_features:
             input_features[f"observation.images.{cam_name}"] = PolicyFeature(
                 type=FeatureType.VISUAL, shape=self.image_dim
             )

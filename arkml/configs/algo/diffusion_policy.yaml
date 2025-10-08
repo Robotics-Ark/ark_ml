@@ -1,0 +1,33 @@
+name: diffusion_policy
+model:
+  name: DiffusionPolicyModel
+  state_dim: 8
+  action_dim: 8
+  obs_horizon: 8
+  pred_horizon: 16
+  action_horizon: 8
+  window_size: 24
+  base_ch: 64
+  image_emb_dim : 256
+  joint_emb_dim : 128
+  time_emb_dim : 128
+  diffusion_steps: 500
+  model_path: null
+  # Image encoder freezing controls
+  image_freeze_backbone: true
+  image_trainable_layers: ["layer4"]
+  image_bn_eval: true
+trainer:
+  max_epochs: 100
+  lr: 0.0003
+  weight_decay: 1e-6
+  ema: true
+  ema_power: 0.75
+  grad_clip: 1.0
+  scheduler: cosine
+  batch_size: 256
+  log_every_n_steps: 50
+  val_every_n_epochs: 10
+  num_workers: 8
+  prefetch_factor: 8
+  max_steps : 100000

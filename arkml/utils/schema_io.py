@@ -56,6 +56,15 @@ def load_yaml(config_path: str) -> dict:
     return cfg_dict
 
 
+def get_visual_features(schema: dict) -> list[str]:
+    visual_features = []
+    for key, entries in schema.items():
+        for item in entries:
+            if item["using"] == "rgbd":
+                visual_features.append(key)
+    return visual_features
+
+
 def get_ark_fn_type(ark_module: unpack, name: str):
     """
     Retrieve both an unpacking function and its corresponding type from Ark module.

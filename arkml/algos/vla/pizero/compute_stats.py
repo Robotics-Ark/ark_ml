@@ -14,6 +14,8 @@ from arkml.utils.stats import (
     _finalize_stats,
 )
 
+from arkml.core.app_context import ArkMLContext
+
 
 def _iter_trajectories(dataset_path: str):
     files = sorted(
@@ -33,7 +35,6 @@ def _iter_trajectories(dataset_path: str):
 def compute_pizero_stats(
     dataset_path: str,
     *,
-    visual_input_features=None,
     obs_dim: int = 9,
     action_dim: int = 8,
     image_channels: int = 3,
@@ -42,6 +43,7 @@ def compute_pizero_stats(
 ) -> dict[str, dict[str, Any]]:
 
     trajectories = list(_iter_trajectories(dataset_path))
+    visual_input_features = ArkMLContext.visual_input_features
     if not trajectories:
         raise FileNotFoundError(f"No trajectories found in {dataset_path}")
 

@@ -5,7 +5,7 @@ model:
   joint_dim: 9
   action_dim: 8
   obs_horizon: 1
-  checkpoint: ""
+  model_path: ""
   stepper_frequency: 5
   global_config: ""
   d_model: 512
