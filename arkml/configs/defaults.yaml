@@ -13,4 +13,5 @@ step_sleep: 0.1
 node_name: Policy
 
 # Default channel config file used by PolicyNode. Override via CLI if needed.
+channel_schema: ark_framework/ark/configs/franka_panda.yaml
 global_config: ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml
