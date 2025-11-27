@@ -89,11 +89,15 @@ class TrainingProgressCallback(BaseCallback):
 
 class ObservationWrapper(gym.vector.VectorEnvWrapper):
     """
-    Vectorized observation wrapper: converts Ark dict observations
-    to {"rgb": (N,3,H,W), "proprio": (N,D)} format.
+    Vectorized observation wrapper for Ark environment.
     """
 
     def __init__(self, venv: gym.vector.VectorEnv):
+        """
+        Wrapper initializer.
+        Args:
+            venv: The vectorized Ark environment to wrap.
+        """
         super().__init__(venv)
         base_space = venv.single_observation_space
         if base_space is None or not isinstance(base_space, spaces.Dict):
@@ -120,15 +124,53 @@ class ObservationWrapper(gym.vector.VectorEnvWrapper):
         self.observation_space = batch_space(single_space, n=venv.num_envs)
 
     def reset(self, seed: int | None = None, options: dict | None = None):
+        """
+        Reset the environment and return transformed observations.
+        Args:
+            seed: Random seed.
+            options: Reset parameters.
+
+        Returns:
+            tuple:
+                - dict: Transformed initial observations in standardized format.
+                - dict: Additional reset information from the environment.
+
+        """
         obs, info = self.env.reset(seed=seed, options=options)
         return self._transform(obs), info
 
     def step(self, actions):
+        """
+        Take a step in the environment using the provided actions.
+        Args:
+            actions: Batched actions to forward to the underlying vector env.
+
+        Returns:
+            tuple:
+                - dict: Transformed observations after stepping.
+                - np.ndarray: Step rewards.
+                - np.ndarray: Episode termination flags.
+                - np.ndarray: Episode truncation flags.
+                - dict: Additional step information.
+
+        """
         obs, rewards, terminated, truncated, info = self.env.step(actions)
         return self._transform(obs), rewards, terminated, truncated, info
 
     @staticmethod
     def _transform(obs: dict[str, Any]) -> dict[str, Any]:
+        """
+        Convert raw Ark environment observations into standardized multi-input format.
+        Args:
+            obs: Raw observation dictionary from the vector env.
+
+        Returns:
+            dict[str, Any]:
+                A dictionary with:
+                - ``"rgb"``: Float32 image tensor (N, 3, H, W).
+                - ``"proprio"``: Float32 proprioception vector (N, D).
+
+        """
         rgb = np.asarray(obs["sensors::top_camera::rgb"], dtype=np.float32)
         if rgb.max() > 1.0:
             rgb /= 255.0
@@ -151,7 +193,19 @@ class ObservationWrapper(gym.vector.VectorEnvWrapper):
 
         return {"rgb": rgb, "proprio": proprio}
 
-    def observation(self, obs):
+    def observation(self, obs) -> dict[str, Any]:
+        """
+        Transform a single environment observation (non-batched).
+        Args:
+            obs: Raw single-environment observation.
+
+        Returns:
+            dict[str, Any]:
+                Dictionary with:
+                - ``"rgb"``: RGB array from the top camera.
+                - ``"proprio"``: Flattened proprioceptive vector.
+
+        """
         rgb = obs["sensors::top_camera::rgb"]
 
         proprio = np.concatenate(
@@ -162,8 +216,7 @@ class ObservationWrapper(gym.vector.VectorEnvWrapper):
 
 class ActionSmoothingWrapper(gym.vector.VectorEnvWrapper):
     """
-    Simple exponential moving average smoother for continuous actions.
-    Keeps per-env state so resets don't bleed through.
+    A vectorized action-smoothing wrapper.
     """
 
     def __init__(
@@ -174,42 +227,66 @@ class ActionSmoothingWrapper(gym.vector.VectorEnvWrapper):
         warmup_steps: int = 0,
         warmup_clip_delta: float | None = None,
     ):
+        """
+        Initialize the action smoother.
+        Args:
+            venv: The vectorized environment to wrap. Must have a Box action space.
+            alpha: Exponential smoothing factor. `alpha=1.0` means no smoothing.
+            clip_delta: Maximum allowed per-step change in each action.
+            warmup_steps: Number of initial steps per environment where a
+                warm-up clipping value is applied.
+            warmup_clip_delta:  clip value used during the warm-up period.
+        """
         super().__init__(venv)
         if not isinstance(venv.single_action_space, spaces.Box):
             raise ValueError("Action smoothing only supports Box action spaces.")
         self.alpha = float(alpha)
         self.clip_delta = None if clip_delta is None else float(clip_delta)
         self.warmup_steps = int(warmup_steps)
-        # During warmup fall back to either the dedicated warmup clip or the default clip
+        # Warmup fall back to either the dedicated warmup clip or the default clip
         self.warmup_clip_delta = (
             float(warmup_clip_delta)
             if warmup_clip_delta is not None
             else (self.clip_delta if self.clip_delta is not None else None)
         )
         self._prev_actions = None
-        self._reset_mask = None
         self._warmup_remaining = None
 
     def reset(self, seed: int | None = None, options: dict | None = None):
+        """
+        Reset the underlying vectorized environment and initialize the smoothing state.
+        Args:
+            seed: RNG seed for the environment reset.
+            options: Environment-specific reset options.
+
+        Returns:
+            obs: Batched reset observations.
+            info: Additional reset information from the environment.
+
+        """
         obs, info = self.env.reset(seed=seed, options=options)
-        # Use the robot's reported reset pose as the initial action baseline
+        # Use the robot's reset pose as the initial action baseline
         action_dim = int(np.prod(self.env.single_action_space.shape))
         self._prev_actions = task_space_action_from_obs(
             obs=obs, action_dim=action_dim, num_envs=self.num_envs
         )
-        self._reset_mask = np.ones(self.num_envs, dtype=bool)
         self._warmup_remaining = np.full(self.num_envs, self.warmup_steps, dtype=int)
         return obs, info
 
     def step(self, actions):
+        """
+        Apply smoothing to the provided actions and step the environment.
+        Args:
+            actions: Raw environment actions before smoothing.
+
+        Returns:
+            A tuple `(obs, rewards, terminated, truncated, info)` exactly as
+            returned by the underlying vectorized environment.
+
+        """
         smoothed = self._apply_filter(actions)
         obs, rewards, terminated, truncated, info = self.env.step(smoothed)
         dones = np.logical_or(terminated, truncated)
-        # Mark envs that finished so the next action goes through warmup again
-        if self._reset_mask is None or self._reset_mask.shape[0] != dones.shape[0]:
-            self._reset_mask = dones.copy()
-        else:
-            self._reset_mask = dones
         if (
             self._warmup_remaining is None
             or self._warmup_remaining.shape[0] != dones.shape[0]
@@ -220,7 +297,15 @@ class ActionSmoothingWrapper(gym.vector.VectorEnvWrapper):
         self._warmup_remaining[dones] = self.warmup_steps
         return obs, rewards, terminated, truncated, info
 
-    def _apply_filter(self, actions: Any) -> Any:
+    def _apply_filter(self, actions: Any):
+        """
+        Apply EMA smoothing and optional delta clipping to a batch of actions.
+        Args:
+            actions: A batch of raw actions with shape `[num_envs, ...]`.
+
+        Returns:
+            The smoothed and clipped action batch with the same shape as input.
+        """
         if (
             self.alpha <= 0.0
             and self.clip_delta is None
@@ -230,8 +315,6 @@ class ActionSmoothingWrapper(gym.vector.VectorEnvWrapper):
 
         arr = np.asarray(actions, dtype=np.float32)
 
-        if self._reset_mask is None or self._reset_mask.shape[0] != arr.shape[0]:
-            self._reset_mask = np.zeros(arr.shape[0], dtype=bool)
         if (
             self._warmup_remaining is None
             or self._warmup_remaining.shape[0] != arr.shape[0]
@@ -239,7 +322,6 @@ class ActionSmoothingWrapper(gym.vector.VectorEnvWrapper):
             self._warmup_remaining = np.zeros(arr.shape[0], dtype=int)
 
         prev = np.array(self._prev_actions, copy=True)
-        reset_mask = self._reset_mask
 
         alpha = max(0.0, min(self.alpha, 1.0))
         smoothed = alpha * arr + (1.0 - alpha) * prev
@@ -266,7 +348,6 @@ class ActionSmoothingWrapper(gym.vector.VectorEnvWrapper):
                 self._warmup_remaining[i] -= 1
 
         self._prev_actions = smoothed
-        self._reset_mask = np.zeros_like(reset_mask)
         return smoothed
 
 
@@ -276,6 +357,11 @@ class SB3GymVectorAdapter(VecEnv):
     """
 
     def __init__(self, vec_env: gym.vector.VectorEnv):
+        """
+        Initialize the SB3 adapter.
+        Args:
+            vec_env: The underlying Gymnasium VectorEnv.
+        """
         obs_space = vec_env.single_observation_space
         act_space = vec_env.single_action_space
         super().__init__(vec_env.num_envs, obs_space, act_space)
@@ -283,13 +369,41 @@ class SB3GymVectorAdapter(VecEnv):
         self._actions = None
 
     def reset(self, seed: int | None = None, options: dict | None = None):
+        """
+        Reset all sub-environments.
+        Args:
+            seed: Random seed.
+            options: Optional reset options.
+
+        Returns:
+
+        """
         obs, info = self._vec_env.reset(seed=seed, options=options)
         return obs
 
     def step_async(self, actions: Any) -> None:
+        """
+        Queue actions for the next environment step.
+        Args:
+            actions: The actions to apply to each environment instance.
+
+        Returns:
+            None
+
+        """
         self._actions = actions
 
     def step_wait(self):
+        """
+        Execute the environment step using previously provided actions.
+        Returns:
+            tuple:
+                - obs (Any): Batched observations.
+                - rewards (np.ndarray): Vector of rewards for each environment.
+                - dones (np.ndarray): Boolean flags indicating episode completion.
+                - infos (list[dict]): Per-environment info dictionaries.
+
+        """
         obs, rewards, terminated, truncated, infos = self._vec_env.step(self._actions)
         dones = np.logical_or(terminated, truncated)
         # ensure infos is a list
@@ -298,13 +412,38 @@ class SB3GymVectorAdapter(VecEnv):
         return obs, rewards, dones, infos
 
     def close(self) -> None:
+        """
+        Close the underlying vector environment.
+        Returns:
+            None
+
+        """
         return self._vec_env.close()
 
     def render(self, mode: str = "human"):
+        """
+        Render the environment.
+        Args:
+            mode: Render mode.
+
+        Returns:
+            Any: Rendered frame or display output.
+
+        """
         return getattr(self._vec_env, "render", lambda mode=None: None)(mode)
 
     # ---- implement all abstract methods ----
     def get_attr(self, attr_name: str, indices: list[int] | None = None):
+        """
+        Retrieve attribute values from individual sub-environments.
+        Args:
+            attr_name: Name of the attribute to fetch.
+            indices: List of environment indices.
+
+        Returns:
+            A list of attribute values from the selected environments.
+
+        """
         envs = getattr(self._vec_env, "envs", None)
         if envs is None:
             raise AttributeError(
@@ -316,6 +455,17 @@ class SB3GymVectorAdapter(VecEnv):
     def set_attr(
         self, attr_name: str, value: Any, indices: list[int] | None = None
     ) -> None:
+        """
+        Set attribute values on individual sub-environments.
+        Args:
+            attr_name: The attribute to modify.
+            value: The value to assign to the attribute.
+            indices: Indices of environments to modify.
+
+        Returns:
+            None
+
+        """
         envs = getattr(self._vec_env, "envs", None)
         if envs is None:
             raise AttributeError(
@@ -328,6 +478,18 @@ class SB3GymVectorAdapter(VecEnv):
     def env_method(
         self, method_name: str, *args, indices: list[int] | None = None, **kwargs
     ):
+        """
+        Call a method on sub-environments.
+        Args:
+            method_name: The method name to invoke.
+            *args: Positional arguments passed to the method.
+            indices: Indices of environments to call.
+            **kwargs: Keyword arguments passed to the method.
+
+        Returns:
+            Results of the method calls for each environment selected.
+
+        """
         envs = getattr(self._vec_env, "envs", None)
         if envs is None:
             raise AttributeError(
@@ -337,6 +499,16 @@ class SB3GymVectorAdapter(VecEnv):
         return [getattr(envs[i], method_name)(*args, **kwargs) for i in idxs]
 
     def env_is_wrapped(self, wrapper_class, indices: list[int] | None = None):
+        """
+        Check whether each selected environment is wrapped with a given wrapper.
+        Args:
+            wrapper_class: The wrapper class to check for.
+            indices: Environment indices.
+
+        Returns:
+            Boolean flags indicating wrapper presence per environment.
+
+        """
         envs = getattr(self._vec_env, "envs", None)
         if envs is None:
             return [False] * self.num_envs
@@ -535,19 +707,6 @@ class StableBaselinesRLAlgorithm(BaseAlgorithm):
 if __name__ == "__main__":
     from arkml.examples.rl.franka_env import FrankaPickPlaceEnv
     from ark.utils.video_recorder import VideoRecorder
-    from tqdm import tqdm
-
-    # vec_env = make_vector_env(
-    #     FrankaPickPlaceEnv,
-    #     num_envs=1,
-    #     channel_schema="ark_framework/ark/configs/franka_panda.yaml",
-    #     global_config="ark_diffusion_policies_on_franka/diffusion_policy/config/global_config.yaml",
-    #     sim=True,
-    #     asynchronous=False,
-    # )
-    #
-    # env = ObservationWrapper(vec_env)
-    # obs, _ = env.reset()
 
     channel_schema = "ark_framework/ark/configs/franka_panda.yaml"
     global_config = (
