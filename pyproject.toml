@@ -17,6 +17,7 @@ dependencies = [
     "lerobot",
     "transformers",
     "pytest",
+    "stable-baselines3[extra]",
 ]
 
 [project.scripts]
