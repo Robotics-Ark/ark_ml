@@ -11,17 +11,8 @@ import arkml.utils.transform_utils as T
 
 class Falling(FailureCondition):
     """
-    Falling (failure condition) used for any navigation-type tasks
-    Episode terminates if the robot falls out of the world (i.e.: falls below the floor height by at least
-    @fall_height
-
-    Args:
-        robot_idn (int): robot identifier to evaluate condition with. Default is 0, corresponding to the first
-            robot added to the scene
-        fall_height (float): distance (m) > 0 below the scene's floor height under which the the robot is considered
-            to be falling out of the world
-        topple (bool): whether to also consider the robot to be falling if it is toppling over (i.e.: if it is
-            no longer upright
+    Termination condition that triggers when the robot falls below a height
+    threshold or topples beyond a tilt tolerance.
     """
 
     def __init__(
@@ -31,26 +22,44 @@ class Falling(FailureCondition):
         tilt_tolerance: float = 0.75,
         floor_height: float | None = None,
     ):
-        # Store internal vars
+        """
+        Initialize the termination condition.
+        Args:
+            fall_height: Allowed distance below the floor height before the robot is considered to have fallen.
+            topple: If True, also terminate when the robot tips over based on its orientation.
+            tilt_tolerance: Minimum acceptable z-component of the robot's up vector. Values below
+                            this threshold indicate that the robot has toppled.
+            floor_height: If None, the floor height will be inferred from the observation on the
+                            first step. Otherwise, the provided height is used.
+        """
         self._fall_height = fall_height
         self._topple = topple
         self._tilt_tolerance = tilt_tolerance
         self._floor_height = floor_height
         self._violation_steps = 0
 
-        # Run super init
         super().__init__()
 
-    def reset(self):
+    def reset(self) -> None:
+        """
+        Reset internal state for a new episode.
+        Returns:
+
+        """
         super().reset()
         self._violation_steps = 0
-        # Recompute on next step to avoid carrying stale data between episodes
         self._floor_height = None
 
-    def _step(self, obs, action):
+    def _step(self, obs) -> bool:
+        """
+        Check whether the robot has fallen or toppled.
+        Args:
+            obs: Current environment observation, expected to contain robot pose information.
+        Returns:
+            True if a fall or topple event is detected, otherwise False.
+        """
         robot = RobotState.from_observation(obs)
         if robot is None:
-            # Without pose information we cannot assess falling; stay alive.
             return False
 
         if self._floor_height is None:
@@ -60,7 +69,6 @@ class Falling(FailureCondition):
         if robot_z < (self._floor_height - self._fall_height):
             return True
 
-        # Terminate if the robot has toppled over
         if self._topple:
             robot_up = T.quat_apply(
                 torch.as_tensor(robot.orientation, dtype=torch.float32),
@@ -74,14 +82,8 @@ class Falling(FailureCondition):
 
 class ObjectFalling(FailureCondition):
     """
-    Object falling (failure condition) for manipulation-type tasks.
-    Episode terminates if the specified object falls below the floor height
-    by at least @fall_height.
-
-    Args:
-        obj_name (str): Name of the target object in the scene registry.
-        fall_height (float): Distance (m) > 0 below the scene's floor height
-            under which the object is considered to have fallen out of the world.
+    Termination condition that triggers when a specified object (or objects)
+    falls, topples, or leaves the workspace for a sustained number of steps.
     """
 
     def __init__(
@@ -105,12 +107,22 @@ class ObjectFalling(FailureCondition):
         self._violation_steps = 0
         super().__init__()
 
-    def reset(self):
+    def reset(self) -> None:
+        """Reset the internal state for a new episode."""
         super().reset()
         self._violation_steps = 0
         self._floor_height = None
 
-    def _step(self, obs, action):
+    def _step(self, obs):
+        """
+        Check monitored objects for falling or toppling events.
+        Args:
+            obs: Current environment observation
+
+        Returns:
+            True if any monitored object falls or topples for a sustained
+            number of steps, otherwise False.
+        """
         for obj_name in self._obj_names:
             object_state = ObjectState.from_observation(obs, obj_name)
 
@@ -144,17 +156,21 @@ class ObjectFalling(FailureCondition):
 
 def infer_floor_height(obs: dict, default: float = 0.0) -> float:
     """
-    Estimate a floor height from available position observations.
-    Uses the minimum z found to approximate the support surface.
+    Infer the floor height from observation data.
+    Args:
+        obs: Observation dictionary containing positions of objects or robot parts.
+        default: Returned if no suitable position entries are found.
+
+    Returns:
+        Estimated floor height.
+
     """
     candidates = []
     for key, value in obs.items():
         if key.endswith("::position") and hasattr(value, "__len__"):
-            try:
-                z_val = float(value[2])
-                candidates.append(z_val)
-            except Exception:
-                continue
+            z_val = float(value[2])
+            candidates.append(z_val)
+
     if candidates:
         return min(candidates)
     return default

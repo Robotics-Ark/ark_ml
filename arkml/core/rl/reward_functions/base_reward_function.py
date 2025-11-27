@@ -1,82 +1,75 @@
 from abc import ABCMeta, abstractmethod
 from copy import deepcopy
+from typing import Any
 
 
 class BaseRewardFunction(metaclass=ABCMeta):
     """
     Base RewardFunction class
-    Reward-specific reset and get_reward methods are implemented in subclasses
     """
 
     def __init__(self):
-        # Store internal vars that will be filled in at runtime
+        """Initialize the reward function state."""
         self._reward = None
         self._info = None
 
     @abstractmethod
-    def _step(self, obs, action):
+    def _step(self, obs) -> tuple[float, dict]:
         """
-        Step the reward function and compute the reward at the current timestep. Overwritten by subclasses.
-
+        Compute the reward and info dictionary for a single timestep.
         Args:
-            obs (dict): Observation at current timestep
-            action (n-array): 1D flattened array of actions executed by all agents in the environment
+            obs: The current environment observation.
 
         Returns:
-            2-tuple:
-                - bool: computed reward
-                - dict: any reward-related information for this specific reward
+            reward : The scalar reward value for this timestep.
+            info : Additional diagnostic information about the reward computation.
         """
+
         raise NotImplementedError()
 
-    def step(self, obs, action):
+    def step(self, obs) -> tuple[float, dict]:
         """
-        Step the reward function and compute the reward at the current timestep.
-
+        Compute and record the reward and info for the current step.
         Args:
-            obs (dict): Observation at current timestep
-            action (n-array): 1D flattened array of actions executed by all agents in the environment
+            obs: The current environment observation.
 
         Returns:
-            2-tuple:
-                - bool: computed reward
-                - dict: any reward-related information for this specific reward
+            reward : The computed reward.
+            info : A deep-copied dictionary of auxiliary information about the reward.
         """
-        # Step internally and store output
-        self._reward, self._info = self._step(obs=obs, action=action)
 
-        # Return reward and a copy of the info
+        self._reward, self._info = self._step(obs=obs)
+
         return self._reward, deepcopy(self._info)
 
-    def reset(self, initial_obs=None):
-        """
-        Reward function-specific reset
-
-        Args:
-            initial_obs (dict | None): Optional initial observation to prime internal state
-        """
+    def reset(self) -> None:
+        """Reset internal reward state."""
         # Reset internal vars
         self._reward = None
         self._info = None
 
     @property
-    def reward(self):
+    def reward(self) -> float:
         """
+        Get the most recently computed reward.
         Returns:
-            float: Current reward for this reward function
+            The last reward computed by `step()`.
         """
         assert (
             self._reward is not None
         ), "At least one step() must occur before reward can be calculated!"
+
         return self._reward
 
     @property
-    def info(self):
+    def info(self) -> dict[str, Any]:
         """
+        Get the most recently computed info dictionary.
         Returns:
-            dict: Current info for this reward function
+            The info dictionary from the last `step()` call.
         """
         assert (
             self._info is not None
         ), "At least one step() must occur before info can be calculated!"
+
         return self._info

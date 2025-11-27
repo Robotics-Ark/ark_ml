@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import gymnasium as gym
 import numpy as np
@@ -16,6 +16,8 @@ from omegaconf import DictConfig
 from stable_baselines3 import PPO, SAC, TD3, DDPG
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import VecEnv, VecMonitor
+from ark.utils.scene_status_utils import task_space_action_from_obs
+from tqdm import tqdm
 
 # Supported SB3 algorithms
 _SB3_ALGOS = {
@@ -29,7 +31,6 @@ _SB3_ALGOS = {
 class TensorboardRewardCallback(BaseCallback):
     """
     Callback to log per-episode rewards to TensorBoard
-    when using custom vectorized adapters.
     """
 
     def _on_step(self) -> bool:
@@ -47,6 +48,12 @@ class TrainingProgressCallback(BaseCallback):
     """TQDM-like progress bar for SB3 training."""
 
     def __init__(self, total_timesteps: int, log_interval: int = 10_000):
+        """
+        Initialize internals
+        Args:
+            total_timesteps: Total number of timesteps that training is expected to run.
+            log_interval: Interval (in timesteps) at which progress is printed.
+        """
         super().__init__()
         self.total_timesteps = total_timesteps
         self.log_interval = log_interval
@@ -54,14 +61,15 @@ class TrainingProgressCallback(BaseCallback):
         self._tqdm_bar = None
 
     def _on_training_start(self) -> None:
-        try:
-            from tqdm import tqdm
-
-            self._tqdm_bar = tqdm(total=self.total_timesteps, desc="SB3 training")
-        except ImportError:
-            self._tqdm_bar = None
+        """Initialize the TQDM progress bar if the `tqdm` package is available."""
+        self._tqdm_bar = tqdm(total=self.total_timesteps, desc="SB3 training")
 
     def _on_step(self) -> bool:
+        """
+        Update the progress bar or log progress at the current training step.
+        Returns:
+            Always returns True to allow training to continue.
+        """
         delta = self.num_timesteps - self._last
         if self._tqdm_bar:
             self._tqdm_bar.update(delta)
@@ -71,6 +79,7 @@ class TrainingProgressCallback(BaseCallback):
         return True
 
     def _on_training_end(self) -> None:
+        """Finalize and close the progress bar after training completes."""
         if self._tqdm_bar:
             remaining = self.total_timesteps - self._last
             if remaining > 0:
@@ -110,7 +119,7 @@ class ObservationWrapper(gym.vector.VectorEnvWrapper):
         self.single_observation_space = single_space
         self.observation_space = batch_space(single_space, n=venv.num_envs)
 
-    def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
+    def reset(self, seed: int | None = None, options: dict | None = None):
         obs, info = self.env.reset(seed=seed, options=options)
         return self._transform(obs), info
 
@@ -124,7 +133,6 @@ class ObservationWrapper(gym.vector.VectorEnvWrapper):
         if rgb.max() > 1.0:
             rgb /= 255.0
         rgb = np.transpose(rgb, (0, 3, 1, 2))  # NCHW
-        # rgb = np.nan_to_num(rgb, nan=0.0, posinf=0.0, neginf=0.0)
 
         proprio = (
             np.concatenate(
@@ -162,60 +170,100 @@ class ActionSmoothingWrapper(gym.vector.VectorEnvWrapper):
         self,
         venv: gym.vector.VectorEnv,
         alpha: float = 0.3,
-        clip_delta: Optional[float] = None,
+        clip_delta: float | None = None,
+        warmup_steps: int = 0,
+        warmup_clip_delta: float | None = None,
     ):
         super().__init__(venv)
         if not isinstance(venv.single_action_space, spaces.Box):
             raise ValueError("Action smoothing only supports Box action spaces.")
         self.alpha = float(alpha)
         self.clip_delta = None if clip_delta is None else float(clip_delta)
-        self._prev_actions: Optional[np.ndarray] = None
-        self._reset_mask: Optional[np.ndarray] = None
-
-    def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
+        self.warmup_steps = int(warmup_steps)
+        # During warmup fall back to either the dedicated warmup clip or the default clip
+        self.warmup_clip_delta = (
+            float(warmup_clip_delta)
+            if warmup_clip_delta is not None
+            else (self.clip_delta if self.clip_delta is not None else None)
+        )
         self._prev_actions = None
         self._reset_mask = None
-        return self.env.reset(seed=seed, options=options)
+        self._warmup_remaining = None
+
+    def reset(self, seed: int | None = None, options: dict | None = None):
+        obs, info = self.env.reset(seed=seed, options=options)
+        # Use the robot's reported reset pose as the initial action baseline
+        action_dim = int(np.prod(self.env.single_action_space.shape))
+        self._prev_actions = task_space_action_from_obs(
+            obs=obs, action_dim=action_dim, num_envs=self.num_envs
+        )
+        self._reset_mask = np.ones(self.num_envs, dtype=bool)
+        self._warmup_remaining = np.full(self.num_envs, self.warmup_steps, dtype=int)
+        return obs, info
 
     def step(self, actions):
         smoothed = self._apply_filter(actions)
         obs, rewards, terminated, truncated, info = self.env.step(smoothed)
         dones = np.logical_or(terminated, truncated)
-        if self._reset_mask is None:
+        # Mark envs that finished so the next action goes through warmup again
+        if self._reset_mask is None or self._reset_mask.shape[0] != dones.shape[0]:
             self._reset_mask = dones.copy()
         else:
             self._reset_mask = dones
+        if (
+            self._warmup_remaining is None
+            or self._warmup_remaining.shape[0] != dones.shape[0]
+        ):
+            self._warmup_remaining = np.full(
+                dones.shape[0], self.warmup_steps, dtype=int
+            )
+        self._warmup_remaining[dones] = self.warmup_steps
         return obs, rewards, terminated, truncated, info
 
     def _apply_filter(self, actions: Any) -> Any:
-        if self.alpha <= 0.0:
+        if (
+            self.alpha <= 0.0
+            and self.clip_delta is None
+            and self.warmup_clip_delta is None
+        ):
             return actions
 
         arr = np.asarray(actions, dtype=np.float32)
-        if self._prev_actions is None:
-            self._prev_actions = arr
-            self._reset_mask = np.zeros(arr.shape[0], dtype=bool)
-            return arr
 
         if self._reset_mask is None or self._reset_mask.shape[0] != arr.shape[0]:
             self._reset_mask = np.zeros(arr.shape[0], dtype=bool)
+        if (
+            self._warmup_remaining is None
+            or self._warmup_remaining.shape[0] != arr.shape[0]
+        ):
+            self._warmup_remaining = np.zeros(arr.shape[0], dtype=int)
 
-        smoothed = np.array(self._prev_actions, copy=True)
+        prev = np.array(self._prev_actions, copy=True)
         reset_mask = self._reset_mask
 
-        # Do not smooth freshly reset envs
-        smoothed[reset_mask] = arr[reset_mask]
+        alpha = max(0.0, min(self.alpha, 1.0))
+        smoothed = alpha * arr + (1.0 - alpha) * prev
 
-        keep_mask = ~reset_mask
-        if keep_mask.any():
-            smoothed[keep_mask] = (
-                self.alpha * arr[keep_mask]
-                + (1.0 - self.alpha) * self._prev_actions[keep_mask]
-            )
-            if self.clip_delta is not None:
-                delta = smoothed[keep_mask] - self._prev_actions[keep_mask]
-                delta = np.clip(delta, -self.clip_delta, self.clip_delta)
-                smoothed[keep_mask] = self._prev_actions[keep_mask] + delta
+        active_clip = np.array(
+            [
+                (
+                    self.warmup_clip_delta
+                    if self._warmup_remaining[i] > 0
+                    else self.clip_delta
+                )
+                for i in range(arr.shape[0])
+            ],
+            dtype=np.float32,
+        )
+        for i in range(arr.shape[0]):
+            clip_val = active_clip[i]
+            if clip_val is None or np.isnan(clip_val):
+                continue
+            delta = smoothed[i] - prev[i]
+            delta = np.clip(delta, -clip_val, clip_val)
+            smoothed[i] = prev[i] + delta
+            if self._warmup_remaining[i] > 0:
+                self._warmup_remaining[i] -= 1
 
         self._prev_actions = smoothed
         self._reset_mask = np.zeros_like(reset_mask)
@@ -234,7 +282,7 @@ class SB3GymVectorAdapter(VecEnv):
         self._vec_env = vec_env
         self._actions = None
 
-    def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
+    def reset(self, seed: int | None = None, options: dict | None = None):
         obs, info = self._vec_env.reset(seed=seed, options=options)
         return obs
 
@@ -255,8 +303,8 @@ class SB3GymVectorAdapter(VecEnv):
     def render(self, mode: str = "human"):
         return getattr(self._vec_env, "render", lambda mode=None: None)(mode)
 
-    # ---- implement all abstract methods correctly ----
-    def get_attr(self, attr_name: str, indices: Optional[list[int]] = None):
+    # ---- implement all abstract methods ----
+    def get_attr(self, attr_name: str, indices: list[int] | None = None):
         envs = getattr(self._vec_env, "envs", None)
         if envs is None:
             raise AttributeError(
@@ -266,7 +314,7 @@ class SB3GymVectorAdapter(VecEnv):
         return [getattr(envs[i], attr_name) for i in idxs]
 
     def set_attr(
-        self, attr_name: str, value: Any, indices: Optional[list[int]] = None
+        self, attr_name: str, value: Any, indices: list[int] | None = None
     ) -> None:
         envs = getattr(self._vec_env, "envs", None)
         if envs is None:
@@ -278,7 +326,7 @@ class SB3GymVectorAdapter(VecEnv):
             setattr(envs[i], attr_name, value)
 
     def env_method(
-        self, method_name: str, *args, indices: Optional[list[int]] = None, **kwargs
+        self, method_name: str, *args, indices: list[int] | None = None, **kwargs
     ):
         envs = getattr(self._vec_env, "envs", None)
         if envs is None:
@@ -288,7 +336,7 @@ class SB3GymVectorAdapter(VecEnv):
         idxs = list(range(self.num_envs)) if indices is None else indices
         return [getattr(envs[i], method_name)(*args, **kwargs) for i in idxs]
 
-    def env_is_wrapped(self, wrapper_class, indices: Optional[list[int]] = None):
+    def env_is_wrapped(self, wrapper_class, indices: list[int] | None = None):
         envs = getattr(self._vec_env, "envs", None)
         if envs is None:
             return [False] * self.num_envs
@@ -303,9 +351,25 @@ def build_vector_env(
     num_envs: int,
     asynchronous: bool,
     sim: bool,
-    action_smoothing: Optional[dict[str, Any]] = None,
+    action_smoothing: dict[str, Any] | None = None,
+    env_kwargs: dict[str, Any] | None = None,
 ) -> VecEnv:
-    """Construct a monitored SB3 vector environment with the multi-input wrapper."""
+    """
+    Construct a fully wrapped, SB3-compatible vectorized environment.
+    Args:
+        env_cls: The environment class to instantiate for each vectorized worker.
+        channel_schema: Path to the YAML schema describing observation and action channels.
+        global_config: Path to the global configuration file for the simulator or environment.
+        num_envs: Number of parallel environments to create.
+        asynchronous: Whether to run environments in parallel using `AsyncVectorEnv` `SyncVectorEnv`.
+        sim: Whether to launch external simulator processes for each environment.
+        action_smoothing: Configuration for action smoothing.
+        env_kwargs: Additional kwargs forwarded to the environment constructor.
+
+    Returns:
+        A monitored, SB3-compatible vectorized environment ready for training.
+    """
+    init_kwargs = dict(env_kwargs or {})
     vec_env = make_vector_env(
         env_cls,
         num_envs=num_envs,
@@ -313,6 +377,7 @@ def build_vector_env(
         global_config=global_config,
         sim=sim,
         asynchronous=asynchronous,
+        env_kwargs=init_kwargs,
     )
 
     if action_smoothing:
@@ -320,6 +385,8 @@ def build_vector_env(
             vec_env,
             alpha=float(action_smoothing.get("alpha", 0.3)),
             clip_delta=action_smoothing.get("clip_delta"),
+            warmup_steps=int(action_smoothing.get("warmup_steps", 0)),
+            warmup_clip_delta=action_smoothing.get("warmup_clip_delta"),
         )
 
     vec_env = ObservationWrapper(vec_env)
@@ -333,6 +400,13 @@ class StableBaselinesRLAlgorithm(BaseAlgorithm):
     """Train Stable-Baselines3 algorithms on Ark vectorized environments."""
 
     def __init__(self, policy: Any, device: str, cfg: DictConfig):
+        """
+        Initialize the Stable-Baselines3 algorithm.
+        Args:
+            policy: Placeholder for API compatibility
+            device: Device identifier passed to SB3 (e.g., "cpu", "cuda:0").
+            cfg: Configurations
+        """
         super().__init__()
         self.device = device
         self.cfg = cfg
@@ -348,11 +422,13 @@ class StableBaselinesRLAlgorithm(BaseAlgorithm):
         self._policy_name = sb3_cfg.get("policy", "MultiInputPolicy")
         self._total_timesteps = sb3_cfg.get("total_timesteps", 100_000)
         self._eval_episodes = sb3_cfg.get("eval_episodes", 1)
-        self._sb3_kwargs: dict[str, Any] = dict(sb3_cfg.get("kwargs", {}) or {})
+        self._sb3_kwargs = dict(sb3_cfg.get("kwargs", {}) or {})
         self._sb3_kwargs.setdefault("device", device)
         self._model = None
         self.output_dir = (
-            Path(self.cfg.output_dir) / "sb3_rl" / datetime.now().strftime("%Y-%m-%d")
+            Path(self.cfg.output_dir)
+            / "sb3_rl"
+            / datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         )
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -365,6 +441,11 @@ class StableBaselinesRLAlgorithm(BaseAlgorithm):
         sim = env_kwargs.get("sim", True)
         num_envs = env_cfg.get("num_envs", 2)
         action_smoothing = sb3_cfg.get("action_smoothing", None)
+        env_init_kwargs = {
+            k: v
+            for k, v in env_kwargs.items()
+            if k not in {"channel_schema", "config_path", "asynchronous", "sim"}
+        }
 
         self._env = build_vector_env(
             env_cls=env_cls,
@@ -374,10 +455,18 @@ class StableBaselinesRLAlgorithm(BaseAlgorithm):
             asynchronous=asynchronous,
             sim=sim,
             action_smoothing=action_smoothing,
+            env_kwargs=env_init_kwargs,
         )
 
     def train(self) -> dict[str, Any]:
-        """Train the selected SB3 algorithm with TensorBoard reward logging."""
+        """
+        Train the configured Stable-Baselines3 algorithm.
+        Returns:
+            Dictionary containing:
+            - "output_dir": Path to the run directory.
+            - "model_path": File path for the saved model.
+            - "total_timesteps": Number of training timesteps performed.
+        """
 
         model = self._sb3_algo_class(
             policy=self._policy_name,
@@ -387,7 +476,6 @@ class StableBaselinesRLAlgorithm(BaseAlgorithm):
         )
         self._model = model
 
-        # Log both progress and episode rewards
         callbacks = [
             TrainingProgressCallback(total_timesteps=self._total_timesteps),
             TensorboardRewardCallback(),
@@ -404,7 +492,17 @@ class StableBaselinesRLAlgorithm(BaseAlgorithm):
         }
 
     def eval(self) -> dict[str, Any]:
-        """Evaluate the trained model over a number of episodes."""
+        """
+        Evaluate the trained SB3 model over several episodes.
+        Returns:
+            Dictionary containing:
+            - "n_eval_episodes": Number of episodes evaluated.
+            - "episode_returns": Per-environment returns for each evaluation episode.
+            - "avg_return": Mean of all collected episode returns.
+
+
+
+        """
         if self._model is None:
             candidate = self.output_dir / "sb3_model.zip"
             if not candidate.exists():
@@ -435,37 +533,54 @@ class StableBaselinesRLAlgorithm(BaseAlgorithm):
 
 
 if __name__ == "__main__":
-    from arkml.core.rl.franka_env import FrankaPickPlaceEnv
+    from arkml.examples.rl.franka_env import FrankaPickPlaceEnv
     from ark.utils.video_recorder import VideoRecorder
     from tqdm import tqdm
 
-    vec_env = make_vector_env(
-        FrankaPickPlaceEnv,
-        num_envs=1,
-        channel_schema="ark_framework/ark/configs/franka_panda.yaml",
-        global_config="ark_diffusion_policies_on_franka/diffusion_policy/config/global_config.yaml",
-        sim=True,
-        asynchronous=False,
+    # vec_env = make_vector_env(
+    #     FrankaPickPlaceEnv,
+    #     num_envs=1,
+    #     channel_schema="ark_framework/ark/configs/franka_panda.yaml",
+    #     global_config="ark_diffusion_policies_on_franka/diffusion_policy/config/global_config.yaml",
+    #     sim=True,
+    #     asynchronous=False,
+    # )
+    #
+    # env = ObservationWrapper(vec_env)
+    # obs, _ = env.reset()
+
+    channel_schema = "ark_framework/ark/configs/franka_panda.yaml"
+    global_config = (
+        "ark_diffusion_policies_on_franka/diffusion_policy/config/global_config.yaml"
     )
-    env = ObservationWrapper(vec_env)
+    action_smoothing = {
+        "alpha": 0.4,
+        "clip_delta": 0.05,
+        "warmup_steps": 3,
+        "warmup_clip_delta": 0.02,
+    }
 
-    model = PPO.load("outputs/sb3_rl/sb3_model_2.zip")
+    env = build_vector_env(
+        env_cls=FrankaPickPlaceEnv,
+        channel_schema=channel_schema,
+        global_config=global_config,
+        num_envs=1,
+        asynchronous=False,
+        sim=True,
+        action_smoothing=action_smoothing,
+    )
+    obs = env.reset()
 
-    obs, _ = env.reset()
-    rec = VideoRecorder("outputs/sb3_rl/rollout.mp4", fps=20)
+    model = PPO.load("outputs/sb3_rl/2025-11-26-23-14-10/sb3_model.zip")
+    rec = VideoRecorder("outputs/sb3_rl/2025-11-26-23-14-10/rollout.mp4", fps=20)
 
-    horizon = 500
-
-    with tqdm(total=horizon) as pbar:
-        for _ in range(horizon):
+    with tqdm(total=500) as pbar:
+        for _ in range(500):
             action, _ = model.predict(obs, deterministic=True)
-            obs, reward, done, truncated, info = env.step(action)
-            # print(reward, done)
+            obs, reward, done, info = env.step(action)
             rec.add_frame(obs)
-
             pbar.update(1)
-
-            if done or truncated:
+            if done:
                 print("Episode finished")
                 break
 
