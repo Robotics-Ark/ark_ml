@@ -5,16 +5,17 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from ark.utils.utils import ConfigPath
 from arkml.core.algorithm import BaseAlgorithm
 from arkml.core.policy import BasePolicy
 from arkml.core.registry import ALGOS
+from arkml.utils.schema_io import get_visual_features
 from arkml.utils.utils import _normalise_shape
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 
 from .compute_stats import compute_pizero_stats
-from .config_utils import resolve_visual_feature_names
 from .dataset import PiZeroDataset
 from .evaluator import PiZeroEvaluator
 from .trainer import PiZeroTrainer
@@ -49,21 +50,16 @@ class PiZeroAlgorithm(BaseAlgorithm):
                 ),
             ]
         )
-        visual_features_cfg = getattr(cfg.algo.model, "visual_input_features", None)
-        visual_features = resolve_visual_feature_names(visual_features_cfg)
 
         img_dim = _normalise_shape(cfg.algo.model.image_dim)
 
         dataset = PiZeroDataset(
             dataset_path=cfg.data.dataset_path,
             transform=transform,
-            task_prompt=cfg.task_prompt,
             pred_horizon=cfg.algo.model.pred_horizon,
-            visual_input_features=visual_features,
         )
         self.calculate_dataset_stats(
             dataset_path=cfg.data.dataset_path,
-            visual_input_features=visual_features,
             obs_dim=cfg.algo.model.obs_dim,
             action_dim=cfg.algo.model.action_dim,
             image_dim=img_dim,
@@ -101,10 +97,6 @@ class PiZeroAlgorithm(BaseAlgorithm):
     def train(self, *args, **kwargs) -> Any:
         """Run training via the underlying trainer.
 
-        Args:
-         dataloader : The training dataloader
-
-
         Returns:
             The result of ``PiZeroTrainer.fit()``, typically training
             metrics or artifacts as defined by the trainer implementation.
@@ -127,9 +119,6 @@ class PiZeroAlgorithm(BaseAlgorithm):
     def eval(self, *args, **kwargs) -> dict:
         """Run validation via the underlying evaluator.
 
-        Args:
-            dataloader: The validation dataloader.
-
         Returns:
             dict: Metrics reported by :class:`PiZeroEvaluator.evaluate()`.
         """
@@ -144,7 +133,6 @@ class PiZeroAlgorithm(BaseAlgorithm):
         self,
         dataset_path,
         *,
-        visual_input_features=None,
         obs_dim: int,
         action_dim: int,
         image_dim: tuple[int, int, int],
@@ -153,7 +141,6 @@ class PiZeroAlgorithm(BaseAlgorithm):
         Compute and save dataset statistics for the PiZero algorithm.
         Args:
             dataset_path: Path to the dataset directory containing trajectory files.
-            visual_input_features: Names of camera/image features to include in statistics computation.
             obs_dim: Dimension of the observation state vector.
             action_dim: Dimension of the action vector.
             image_dim: Dimensions of image data in (channels, height, width) format.
@@ -165,25 +152,25 @@ class PiZeroAlgorithm(BaseAlgorithm):
         try:
             stats_path = Path(dataset_path) / "pizero_stats.json"
             print(f"[PiZeroAlgorithm] Computing dataset stats : {stats_path}")
-            stats = compute_pizero_stats(
-                dataset_path,
-                visual_input_features=visual_input_features,
-                obs_dim=obs_dim,
-                action_dim=action_dim,
-                image_channels=image_dim[0],
-                sample_images_only=True,
-            )
-            stats_path.parent.mkdir(parents=True, exist_ok=True)
-
-            with open(stats_path, "w") as f:
-                json.dump(
-                    {
-                        k: {kk: vv.tolist() for kk, vv in d.items()}
-                        for k, d in stats.items()
-                    },
-                    f,
-                    indent=2,
+            if not stats_path.exists():
+                stats = compute_pizero_stats(
+                    dataset_path,
+                    obs_dim=obs_dim,
+                    action_dim=action_dim,
+                    image_channels=image_dim[0],
+                    sample_images_only=True,
                 )
+                stats_path.parent.mkdir(parents=True, exist_ok=True)
+
+                with open(stats_path, "w") as f:
+                    json.dump(
+                        {
+                            k: {kk: vv.tolist() for kk, vv in d.items()}
+                            for k, d in stats.items()
+                        },
+                        f,
+                        indent=2,
+                    )
 
             self.model.load_dataset_stats(str(stats_path))
         except Exception as e:

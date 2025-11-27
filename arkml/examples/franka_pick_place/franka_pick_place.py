@@ -50,7 +50,6 @@ class RobotNode(ArkEnv):
         self.config = ConfigPath(config_path).read_yaml()
         self.mode = self.config.get("policy_mode")
 
-
     @staticmethod
     def action_packing(action):
         """
@@ -263,7 +262,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--step_sleep",
         type=float,
-        default=0.5,
+        default=0.1,
         help="Sleep time between steps (default: 0.1s)",
     )
     parser.add_argument(
@@ -290,7 +289,6 @@ def parse_args() -> argparse.Namespace:
         default="ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml",
         help="Global config path",
     )
-
 
     return parser.parse_args()
 

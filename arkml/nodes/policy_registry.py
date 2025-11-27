@@ -1,7 +1,8 @@
 from collections.abc import Callable
 
-import torch
 from omegaconf import DictConfig
+
+from arkml.core.policy import BasePolicy
 
 # Global registry for policy node builders
 _POLICY_BUILDERS: dict[str, Callable] = {}
@@ -39,7 +40,7 @@ def _get_policy_key(cfg: DictConfig) -> str:
     return str(getattr(cfg.algo, "name", "")).lower()
 
 
-def get_policy_node(cfg: DictConfig):
+def get_policy_node(cfg: DictConfig) -> BasePolicy:
     """Instantiate the appropriate policy node based on configuration.
 
     Args:
@@ -60,7 +61,7 @@ def get_policy_node(cfg: DictConfig):
 
 @register_policy("pizero")
 @register_policy("pi0")
-def _build_pizero():
+def _build_pizero() -> BasePolicy:
     """Build and return a PiZero policy node from config.
 
     Returns:
@@ -76,3 +77,15 @@ def _build_ACT():
     from arkml.nodes.act_policy_node import ActPolicyNode
 
     return ActPolicyNode
+
+@register_policy("diffusion_policy")
+def _build_diffusion() -> BasePolicy:
+    """Build and return a DiffusionPolicyNode from config.
+
+
+    Returns:
+      DiffusionPolicyNode.
+    """
+    from arkml.nodes.diffusion_node import DiffusionPolicyNode
+
+    return DiffusionPolicyNode

@@ -1,0 +1,28 @@
+name: sb3_rl
+model:
+  name: sb3_dummy        # placeholder
+
+env:
+  class_path: "arkml.examples.rl.franka_env.FrankaPickPlaceEnv"
+  num_envs: 2
+  kwargs:
+    max_steps: 200
+    config_path: "ark_diffusion_policies_on_franka/diffusion_policy/config/global_config.yaml" #${global_config}   # same config used elsewhere
+    channel_schema: "ark_framework/ark/configs/franka_panda.yaml" #${channel_schema}
+    asynchronous: True
+    sim: True
+
+sb3:
+  algo_name: "ppo"        # "ppo", "sac", "td3", "ddpg"
+  policy: "MultiInputPolicy"
+  total_timesteps: 1000000
+  eval_episodes: 5
+  # Optional action smoothing (exponential moving average) applied before sending to the robot
+  action_smoothing:
+    alpha: 0.4          # 0.0 disables smoothing, closer to 1.0 follows the policy more closely
+    clip_delta: 0.05    # per-dimension max change after smoothing; set null to disable clipping
+    warmup_steps: 3     # number of early steps after each reset where movement is further clipped
+    warmup_clip_delta: 0.02  # per-dim cap during warmup; falls back to clip_delta or 0.02 if unset
+  kwargs:                 # passed directly to SB3 algo ctor
+    learning_rate: 3.0e-4
+    gamma: 0.99

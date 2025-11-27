@@ -10,13 +10,11 @@ model:
   pred_horizon: 1
   action_horizon: 1
   image_dim: (3, 480, 640) # Image dimension (b,c,h,w)
-  visual_input_features:
-    - image_top
 
 trainer:
   lr: 2e-4
   batch_size: 8
   max_epochs: 10
-  num_workers: 2
+  num_workers: 4
   use_bf16: true
   weight_decay: 0.0
