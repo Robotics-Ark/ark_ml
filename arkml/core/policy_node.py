@@ -77,7 +77,7 @@ class PolicyNode(ABC, BaseNode):
         self._stop_service = True
         self._resetting = False
         self._video_recorder: VideoRecorder | None = None
-        self._record_video = ArkMLContext.cfg["write_video"] # TODO check why these variables are not set
+        self._record_video = ArkMLContext.cfg["write_video"]
         self._video_cfg = ArkMLContext.cfg["video_cfg"]
 
         self.step_count = 0
