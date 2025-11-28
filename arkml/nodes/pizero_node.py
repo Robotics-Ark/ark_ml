@@ -88,26 +88,40 @@ class PiZeroPolicyNode(PolicyNode):
         """
         if self.text_input is None:
             raise ValueError("Prompt input is empty")
-        obs: dict[str, Any] = {"task": [self.text_input]}
+        obs = {"task": [self.text_input]}
 
-        # State: tensor, ensure [1, D] float32
-        state_value = ob.get("state")
-        if state_value is not None:
-            if isinstance(state_value, torch.Tensor):
-                state_t = state_value
-            else:
-                state_t = torch.from_numpy(state_value)
-            if state_t.dim() == 1:
-                state_t = state_t.unsqueeze(0)
-            obs["state"] = state_t.to(dtype=torch.float32, copy=False)
+        state = np.concatenate(
+            [
+                np.ravel(ob["proprio::pose::position"]),
+                np.ravel(ob["proprio::pose::orientation"]),
+                np.ravel([ob["proprio::joint_state::position"][-2:]]),
+            ]
+        )
+        state = torch.from_numpy(state).float().unsqueeze(0)  # (1, D)
+        img = torch.from_numpy(ob["sensors::image_top::rgb"].copy()).permute(
+            2, 0, 1
+        )  # (C, H, W)
+        img = img.float().div(255.0).unsqueeze(0)  # (1, C, H, W)
+
+        obs["state"] = state
+        #
+        # # State: tensor, ensure [1, D] float32
+        # state_value = ob.get("state")
+        # if state_value is not None:
+        #     if isinstance(state_value, torch.Tensor):
+        #         state_t = state_value
+        #     else:
+        #         state_t = torch.from_numpy(state_value)
+        #     if state_t.dim() == 1:
+        #         state_t = state_t.unsqueeze(0)
+        #     obs["state"] = state_t.to(dtype=torch.float32, copy=False)
 
         # Images:  tensor, ensure [1, C, H, W]
         for cam_name in ArkMLContext.visual_input_features:
-            value = ob.get(cam_name)
-            if value is None:
-                raise KeyError(f"Missing visual input '{cam_name}' in observation")
-            obs[cam_name] = _image_to_tensor(value).unsqueeze(0)
-
+            # value = ob.get(cam_name)
+            # if value is None:
+            #     raise KeyError(f"Missing visual input '{cam_name}' in observation")
+            obs[cam_name] = img  # _image_to_tensor(value).unsqueeze(0)
         return obs
 
     def predict(self, obs_seq):
@@ -127,9 +141,7 @@ class PiZeroPolicyNode(PolicyNode):
         obs = self.prepare_observation(obs_seq)
 
         with torch.no_grad():
-            actions = self.policy.predict_n_actions(
-                obs, n_actions=self.n_infer_actions
-            )
+            actions = self.policy.predict_n_actions(obs, n_actions=self.n_infer_actions)
             actions = actions.detach().cpu().numpy()
 
         return actions[0]

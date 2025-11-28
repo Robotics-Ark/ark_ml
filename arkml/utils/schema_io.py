@@ -61,7 +61,9 @@ def get_visual_features(schema: dict) -> list[str]:
     for key, entries in schema.items():
         for item in entries:
             if item["using"] == "rgbd":
-                visual_features.append(key)
+                visual_features.append(
+                    item["name"] if "name" in item else item["using"]
+                )
     return visual_features
 
 

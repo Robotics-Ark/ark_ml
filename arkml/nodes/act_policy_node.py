@@ -158,12 +158,21 @@ class ActPolicyNode(PolicyNode):
             - ``task``: ``list[str]`` of length 1.
         """
         # ---- Image ----
-
-        img = torch.from_numpy(ob["image_top"].copy()).permute(2, 0, 1)  # (C, H, W)
+        img = torch.from_numpy(ob["sensors::top_camera::rgb"].copy()).permute(
+            2, 0, 1
+        )  # (C, H, W)
         img = img.float().div(255.0).unsqueeze(0)  # (1, C, H, W)
 
         # ---- State ----
-        state = torch.from_numpy(ob["state"]).float().unsqueeze(0)  # (1, D)
+        state = np.concatenate(
+            [
+                np.ravel(ob["proprio::pose::position"]),
+                np.ravel(ob["proprio::pose::orientation"]),
+                np.ravel([ob["proprio::joint_state::position"][-2:]]),
+            ]
+        )
+
+        state = torch.from_numpy(state).float().unsqueeze(0)  # (1, D)
 
         return {
             "image": img,
@@ -189,7 +198,6 @@ class ActPolicyNode(PolicyNode):
 
         memory = self.policy.build_memory(img_t, j_t, z_zero)  # (1, N_ctx, d)
         pred = self.policy.decode_actions(memory, K)  # (1,K,action_dim)
-        print(pred, flush=True)
         return pred.squeeze(0).cpu().numpy()  # (K,action_dim)
 
     @torch.no_grad()

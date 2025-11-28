@@ -1,12 +1,16 @@
 import argparse
 import time
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 from ark.env.ark_env import ArkEnv
 from ark.tools.log import log
+from ark.utils.scene_status_utils import ObjectState, RobotState
 from ark.utils.utils import ConfigPath
+from arkml.core.rl.termination_conditions.base_termination_conditions import (
+    SuccessCondition,
+)
+from arkml.core.rl.termination_conditions.timeout import Timeout
 from arktypes import flag_t, string_t
 from arktypes import (
     task_space_command_t,
@@ -15,79 +19,104 @@ from arktypes import (
     rigid_body_state_t,
     rgbd_t,
 )
-from arktypes.utils import pack, unpack
 from tqdm import tqdm
 
 
-def default_channels() -> dict[str, dict[str, type]]:
-    """Default action/observation channels for the Franka + cube sim."""
-    action_channels: dict[str, type] = {
-        "franka/cartesian_command/sim": task_space_command_t,
-    }
-    observation_channels: dict[str, type] = {
-        "franka/ee_state/sim": pose_t,
-        "franka/joint_states/sim": joint_state_t,
-        "cube/ground_truth/sim": rigid_body_state_t,
-        "target/ground_truth/sim": rigid_body_state_t,
-        "IntelRealSense/rgbd/sim": rgbd_t,
-    }
-    return {"actions": action_channels, "observations": observation_channels}
+def _axes_indices(axes: str) -> list[int]:
+    """
+    Map an axis string like "xyz" or "xy" to position indices.
+    """
+    mapping = {"x": 0, "y": 1, "z": 2}
+    return [mapping[a] for a in axes if a in mapping]
+
+
+class PointGoalTermination(SuccessCondition):
+    """
+    Success condition triggered when the robot's end-effector reaches the cube.
+    """
+
+    def __init__(self, distance_tol: float = 1.0, distance_axes: str = "xyz"):
+        super().__init__()
+        self._distance_tol = distance_tol
+        self._distance_axes = distance_axes
+
+    def _step(self, obs):
+        robot = RobotState.from_observation(obs)
+        cube = ObjectState.from_observation(obs, "cube")
+
+        if robot is None or cube is None:
+            return False
+
+        axes = _axes_indices(self._distance_axes)
+        eef_pos = robot.position[axes]
+        cube_pos = cube.position[axes]
+
+        dist = float(np.linalg.norm(eef_pos - cube_pos))
+        return dist <= self._distance_tol
 
 
 class RobotNode(ArkEnv):
 
-    def __init__(self, max_steps: int, config_path: str):
-        chans = default_channels()
-        super().__init__(
-            environment_name="diffusion_env",
-            action_channels=chans["actions"],
-            observation_channels=chans["observations"],
-            global_config=Path(config_path),
-            sim=True,
-        )
+    def __init__(self, max_steps: int, config_path: str, channel_schema: str):
 
         self.max_steps = max_steps
         self.config = ConfigPath(config_path).read_yaml()
         self.mode = self.config.get("policy_mode")
 
-    @staticmethod
-    def action_packing(action):
-        """
-        Packs the action into a joint_group_command_t format.
-
-        List of:
-        [EE X, EE_Y, EE_Z, EE_Quaternion_X, EE_Quaternion_Y, EE_Quaternion_Z, EE_Quaternion_W, Gripper]
-        """
-        xyz_command = np.array(action[:3])
-        quaternion_command = np.array(action[3:7])
-        gripper_command = action[7]
-
-        franka_cartesian_command = pack.task_space_command(
-            "all", xyz_command, quaternion_command, gripper_command
+        super().__init__(
+            environment_name="ark_franka_env",
+            channel_schema=channel_schema,
+            global_config=config_path,
+            sim=True,
         )
-        return {"franka/cartesian_command/sim": franka_cartesian_command}
 
-    @staticmethod
-    def observation_unpacking(observation_dict):
+    def _create_termination_conditions(self):
+        terminations = dict()
+        terminations["pointgoal"] = PointGoalTermination(
+            distance_tol=0.1,
+            distance_axes="xy",
+        )
+        terminations["timeout"] = Timeout(max_steps=self.max_steps)
+
+        return {}
+
+    def _create_reward_functions(self):
+
+        return {}
+
+    def reset_objects(self):
+        """Reset key scene objects and internal step counter."""
+        self.steps = 0
+        self.reset_component("cube")
+        self.reset_component("target")
+        self.reset_component("franka")
+
+    def reset_service(self) -> None:
+        """Minimal scene bootstrap: reset objects and exit.
+
+        This script no longer bridges observations/actions. The PolicyNode handles
+        that directly. We only ensure the scene is reset and ready.
         """
-        Unpacks the observation from the environment.
 
-        Returns a dictionary with keys
-        """
-        cube_state = observation_dict["cube/ground_truth/sim"]
-        target_state = observation_dict["target/ground_truth/sim"]
+        # Reset the policy node state at the beginning of the episode
+        try:
+            log.info("Resetting Policy Node ...")
+            self.send_service_request(
+                service_name="Policy/policy/reset",
+                request=flag_t(),
+                response_type=string_t,
+            )
+            log.info("Resetting Environment ...")
+            observation, info = self.reset()
 
-        _, cube_position, _, _, _ = unpack.rigid_body_state(cube_state)
-        _, target_position, _, _, _ = unpack.rigid_body_state(target_state)
+        except Exception as e:
+            print(f"Warning: Failed to reset policy via service: {e}")
+        # Give subsystems a moment to settle
+        time.sleep(1.0)
 
-        return {
-            "cube": cube_position,
-            "target": target_position,
-        }
-
-    def terminated_truncated_info(self, state, action, next_state):
-        cube_pos = np.array(state["cube"])
-        target_pos = np.array(state["target"])
+    def terminated_truncated_info(self, state):
+        cube_pos = np.array(state["objects::cube::position"])
+        target_pos = np.array(state["objects::target::position"])
 
         # Terminate if cube is within 5 cm of target
         distance = np.linalg.norm(cube_pos - target_pos)
@@ -104,41 +133,6 @@ class RobotNode(ArkEnv):
 
         return terminated, truncated, self.steps
 
-    def reward(self, state: Any, action: Any, next_state: Any) -> float:
-        """Compute the reward for a transition"""
-        ...
-
-    def reset_objects(self):
-        """Reset key scene objects and internal step counter."""
-        self.steps = 0
-        self.reset_component("cube")
-        self.reset_component("target")
-        self.reset_component("franka")
-
-    def reset_scene(self) -> None:
-        """Minimal scene bootstrap: reset objects and exit.
-
-        This script no longer bridges observations/actions. The PolicyNode handles
-        that directly. We only ensure the scene is reset and ready.
-        """
-
-        # Reset the policy node state at the beginning of the episode
-        observation = None
-        try:
-            log.info("Resetting Policy Node ...")
-            self.send_service_request(
-                service_name="Policy/policy/reset",
-                request=flag_t(),
-                response_type=string_t,
-            )
-            log.info("Resetting Environment ...")
-            observation, info = self.reset()
-
-        except Exception as e:
-            print(f"Warning: Failed to reset policy via service: {e}")
-        # Give subsystems a moment to settle
-        time.sleep(1.0)
-
 
 def stepper_based_episode(
     robo_env: RobotNode,
@@ -151,10 +145,9 @@ def stepper_based_episode(
     failure_count = 0
 
     for ep in tqdm(range(n_episodes), desc="Episodes", unit="ep"):
-        robo_env.reset_scene()
+        robo_env.reset_service()
         success = False
         time.sleep(5)
-        robo_env.observation_space.wait_until_observation_space_is_ready()
         robo_env.send_service_request(
             service_name=f"{policy_node}/policy/start",
             request=flag_t(),
@@ -163,14 +156,12 @@ def stepper_based_episode(
         for step_count in tqdm(
             range(max_step), desc=f"Ep {ep}", unit="step", leave=False
         ):
-            obs = robo_env.observation_space.get_observation()
+            obs = robo_env.ark_observation_space.get_observation()
             if obs is None:
                 print("none")
                 continue
 
-            terminated, truncated, info = robo_env.terminated_truncated_info(
-                obs, None, None
-            )
+            terminated, truncated, info = robo_env.terminated_truncated_info(obs)
 
             if terminated or truncated:
                 success = True
@@ -211,10 +202,9 @@ def service_based_episode(
     failure_count = 0
 
     for ep in tqdm(range(n_episodes), desc="Episodes", unit="ep"):
-        robo_env.reset_scene()
+        robo_env.reset_service()
         success = False
         time.sleep(5)
-        robo_env.observation_space.wait_until_observation_space_is_ready()
         for step_count in tqdm(
             range(max_step), desc=f"Ep {ep}", unit="step", leave=False
         ):
@@ -224,12 +214,10 @@ def service_based_episode(
                 response_type=flag_t,
             )
 
-            obs = robo_env.observation_space.get_observation()
+            obs = robo_env.ark_observation_space.get_observation()
             if obs is None:
                 continue
-            terminated, truncated, info = robo_env.terminated_truncated_info(
-                obs, None, None
-            )
+            terminated, truncated, info = robo_env.terminated_truncated_info(obs)
 
             if terminated or truncated:
                 success = True
@@ -289,6 +277,12 @@ def parse_args() -> argparse.Namespace:
         default="ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml",
         help="Global config path",
     )
+    parser.add_argument(
+        "--env_config_path",
+        type=str,
+        default="ark_framework/ark/configs/franka_panda.yaml",
+        help="Global config path",
+    )
 
     return parser.parse_args()
 
@@ -306,8 +300,11 @@ def main() -> None:
     max_step = args.max_step
     policy_node = args.policy_node_name
     config_path = args.config_path
+    channel_schema = args.env_config_path
 
-    robo_env = RobotNode(max_steps=max_step, config_path=config_path)
+    robo_env = RobotNode(
+        max_steps=max_step, config_path=config_path, channel_schema=channel_schema
+    )
     policy_mode = robo_env.mode
     print(f"Policy Mode : {policy_mode}")
 
