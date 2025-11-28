@@ -24,5 +24,3 @@ sensors:
 text: "Pick the yellow cube and place it in the white background area of the table"
 
 policy_mode: service
-
-channel_config: ark_ml/arkml/examples/franka_pick_place/franka_config/pizero_io_schema.yaml

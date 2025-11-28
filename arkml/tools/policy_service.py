@@ -21,13 +21,10 @@ def rollout(cfg: DictConfig) -> None:
 
     ArkMLContext.cfg = cfg
     ArkMLContext.global_config = ConfigPath(cfg.global_config).read_yaml()
-    ArkMLContext.io_schema = ConfigPath(
-        ArkMLContext.global_config["channel_config"]
-    ).read_yaml()
+    io_schema = ConfigPath(cfg["channel_schema"]).read_yaml()
     ArkMLContext.visual_input_features = get_visual_features(
-        schema=ArkMLContext.io_schema["observation"]
+        schema=io_schema["observation_space"]
     )
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     node = get_policy_node(cfg)
     main(node, device=device)
