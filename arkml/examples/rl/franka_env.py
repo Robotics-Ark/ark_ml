@@ -65,7 +65,7 @@ class FrankaPickPlaceEnv(ArkEnv):
         self.reset_component("franka")
 
     def _create_termination_conditions(self):
-        terminations: dict[str, Any] = {}
+        terminations = dict()
 
         terminations["falling"] = ObjectFalling(obj_name="cube", fall_height=0.3)
         terminations["pointgoal"] = PointGoalTermination(
@@ -77,7 +77,7 @@ class FrankaPickPlaceEnv(ArkEnv):
         return terminations
 
     def _create_reward_functions(self):
-        rewards: dict[str, Any] = {}
+        rewards = dict()
 
         rewards["potential"] = PotentialReward(
             potential_fcn=self.get_potential,

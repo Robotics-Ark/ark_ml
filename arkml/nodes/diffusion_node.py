@@ -59,12 +59,14 @@ class DiffusionPolicyNode(PolicyNode):
         Returns:
             Extracted state.
         """
-        if self.state_key in obs:
-            state = np.asarray(obs[self.state_key], dtype=np.float32)
-        else:
-            raise ValueError(f"Observation {self.state_key} not found")
-        state = np.asarray(state, dtype=np.float32)[: self.action_dim]
-        return torch.from_numpy(state).to(self.device)
+        state = np.concatenate(
+            [
+                np.ravel(obs["proprio::pose::position"]),
+                np.ravel(obs["proprio::pose::orientation"]),
+                np.array([obs["proprio::joint_state::position"][-2]]),
+            ]
+        )
+        return torch.from_numpy(state).float().to(self.device)  # (D,)
 
     @staticmethod
     def _extract_image(obs: dict[str, Any]) -> torch.Tensor:
@@ -76,13 +78,16 @@ class DiffusionPolicyNode(PolicyNode):
         Returns:
             Extracted image.
         """
-        if ArkMLContext.visual_input_features[0] not in obs:
-            raise ValueError(
-                f"Observation {ArkMLContext.visual_input_features[0]} not found"
-            )
+        # if ArkMLContext.visual_input_features[0] not in obs:
+        #     raise ValueError(
+        #         f"Observation {ArkMLContext.visual_input_features[0]} not found"
+        #     )
+        image = torch.from_numpy(obs["sensors::top_camera::rgb"].copy()).permute(
+            2, 0, 1
+        )
 
-        image = obs[ArkMLContext.visual_input_features[0]]
-        return _image_to_tensor(image)
+        # image = obs[ArkMLContext.visual_input_features[0]]
+        return image
 
     @staticmethod
     def _stack_history(
@@ -97,8 +102,7 @@ class DiffusionPolicyNode(PolicyNode):
         Returns:
             Stacked state.
         """
-        if not history:
-            history.append(state)
+        history.append(state)
         while len(history) < obs_horizon:
             history.appendleft(history[0].clone())
         return torch.stack(list(history)[-obs_horizon:], dim=0)
@@ -124,18 +128,16 @@ class DiffusionPolicyNode(PolicyNode):
             self._image_history, image_tensor, self.obs_horizon
         )
 
-        # build past action history
-        if self._action_history:
-            past_actions = self._stack_history(
-                self._action_history,
-                self._action_history[-1],
-                self.action_horizon,
-            )
-        else:
-            # pad with zeros on first rollout
+        # build past action history (do not include the yet-to-be-executed action)
+        if not self._action_history:
             past_actions = torch.zeros(
                 self.action_horizon, self.action_dim, device=self.device
             )
+        else:
+            hist = list(self._action_history)[-self.action_horizon :]
+            while len(hist) < self.action_horizon:
+                hist.insert(0, hist[0])
+            past_actions = torch.stack(hist, dim=0)
 
         # assemble obs dict for policy
         obs_dict = {
@@ -151,7 +153,7 @@ class DiffusionPolicyNode(PolicyNode):
         # predict
         actions = self.policy.predict(obs=obs_dict, scheduler=self.scheduler)
 
-        action = torch.as_tensor(actions, device=self.device)
+        action = torch.as_tensor(actions, device=self.device, dtype=torch.float32)
 
         # update action history with executed action
         self._action_history.append(action)

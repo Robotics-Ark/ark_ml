@@ -5,7 +5,7 @@ from arkml.core.algorithm import Evaluator
 from datasets import tqdm
 from torch.utils.data import DataLoader
 
-from ark_ml.arkml.core.policy import BasePolicy
+from arkml.core.policy import BasePolicy
 
 
 class DiffusionPolicyEvaluator(Evaluator):

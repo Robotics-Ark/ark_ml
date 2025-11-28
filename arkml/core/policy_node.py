@@ -1,20 +1,38 @@
+import os
 from abc import abstractmethod, ABC
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 from ark.client.comm_infrastructure.base_node import BaseNode
-from ark.env.spaces import ObservationSpace, ActionSpace
+from ark.env.ark_env import ArkEnv
 from ark.tools.log import log
-from arkml.utils.schema_io import (
-    get_channel_types,
-    _dynamic_observation_unpacker,
-    _dynamic_action_packer,
-)
-from arkml.utils.schema_io import load_yaml
+from ark.utils.video_recorder import VideoRecorder
+from arkml.core.app_context import ArkMLContext
 from arktypes import flag_t, string_t
 from torch import nn
 
-from arkml.core.app_context import ArkMLContext
+
+class PolicyEnv(ArkEnv):
+    def __init__(self, config_path: str, channel_schema: str):
+        super().__init__(
+            environment_name="policy_env",
+            channel_schema=channel_schema,
+            global_config=config_path,
+            sim=True,
+        )
+
+    @staticmethod
+    def _create_termination_conditions():
+        return {}
+
+    @staticmethod
+    def _create_reward_functions():
+        return {}
+
+    def reset_objects(self):
+        pass
 
 
 class PolicyNode(ABC, BaseNode):
@@ -44,27 +62,12 @@ class PolicyNode(ABC, BaseNode):
             raise ValueError("Policy_mode must be 'service' or 'stepper'")
 
         log.info(f"Policy mode: {self.mode}")
-
-        schema = load_yaml(config_path=cfg_dict["channel_config"])
-        # Channel config to get observations
-        obs_channels = get_channel_types(schema=schema, channel_type="observation")
-        self.observation_unpacking = _dynamic_observation_unpacker(schema)
-
-        if not obs_channels:
-            raise NotImplementedError("No observation channels found")
-
-        self.observation_space = ObservationSpace(
-            obs_channels, self.observation_unpacking, self._lcm
+        self._env = PolicyEnv(
+            channel_schema=ArkMLContext.cfg["channel_schema"],
+            config_path=ArkMLContext.cfg["global_config"],
         )
-        self._multi_comm_handlers.append(
-            self.observation_space.observation_space_listener
-        )
-
-        action_channels = get_channel_types(schema=schema, channel_type="action")
-        self.action_packing = _dynamic_action_packer(schema)
-        self.action_space = ActionSpace(action_channels, self.action_packing, self._lcm)
-
-        self._multi_comm_handlers.append(self.action_space.action_space_publisher)
+        self.obs = None
+        self.debug = os.getenv("ARK_DEBUG", "").lower() in ("1", "true")
 
         # Policy setup
         self.policy = policy
@@ -73,6 +76,12 @@ class PolicyNode(ABC, BaseNode):
         self.latest_action = None
         self._stop_service = True
         self._resetting = False
+        self._video_recorder: VideoRecorder | None = None
+        self._record_video = ArkMLContext.cfg["write_video"] # TODO check why these variables are not set
+        self._video_cfg = ArkMLContext.cfg["video_cfg"]
+
+        self.step_count = 0
+        self.video_save_step = self._video_cfg["save_steps"]
 
         # Create services - predict and reset policy state
         self._predict_service_name = f"{self.name}/policy/predict"
@@ -108,21 +117,24 @@ class PolicyNode(ABC, BaseNode):
                 cfg_dict["simulator"]["node_frequency"], self.step_policy
             )
 
+        if self._record_video:
+            self._start_video_recorder()
+
     def reset(self) -> None:
         """Reset the internal state of the policy."""
         self._stop_service = True
         self._resetting = True
-        self.observation_space.is_ready = False
-        self.suspend_communications(services=False)
         self.latest_action = None
         self.policy.reset()
         # Allow subclasses to clear their own buffers
         reset_hook = getattr(self, "_on_reset", None)
         if callable(reset_hook):
             reset_hook()
-        self.resume_communications(services=False)
-        self.observation_space.wait_until_observation_space_is_ready()
-        _ = self.observation_space.get_observation()
+        self.obs, _ = self._env.reset()
+        # Start a fresh recording after reset
+        if self._video_recorder:
+            self._video_recorder.close()
+            self._start_video_recorder()
         self._resetting = False
 
     def _callback_reset_service(self, channel: str, msg: Any) -> string_t:
@@ -204,16 +216,31 @@ class PolicyNode(ABC, BaseNode):
         Returns:
             None, Publishes the next action.
         """
-        obs = self.observation_space.get_observation()
-        if obs is None:
+        if self._resetting:
+            return
+
+        if self.obs is None:
             log.warning(f"Observation is None")
             return
-        action = self.predict(obs)
-        log.info(f"[ACTION PREDICTED] : {action}")
+
+        if self._record_video and self.step_count >= self.video_save_step:
+            self._start_video_recorder()
+            self.step_count = 0
+
+        action = self.predict(self.obs)
+        self.obs, _, _, _, _ = self._env.step(action)
+        self.step_count += 1
+
+        if self.debug:
+            log.info(f"[ACTION PREDICTED] : {action}")
         if action is None:
             log.warning(f"Predicted action is None")
             return
-        self.action_space.pack_and_publish(action)
+
+        if self._video_recorder and self._record_video:
+            self._video_recorder.add_frame(self.obs)
+            if self.step_count >= self.video_save_step:
+                self._video_recorder.close()
 
     @abstractmethod
     def predict(self, obs_seq: dict[str, Any]) -> np.ndarray:
@@ -226,3 +253,26 @@ class PolicyNode(ABC, BaseNode):
             Predicted next action.
         """
         ...
+
+    def _start_video_recorder(self) -> None:
+        output_dir = Path(ArkMLContext.cfg["output_dir"]) / "videos"
+        filename = self._video_cfg.get(
+            "filename", f"{self.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        )
+        fps = int(self._video_cfg.get("fps", 20))
+        obs_key = self._video_cfg.get("obs_key", "rgb")
+        out_path = output_dir / filename
+        try:
+            self._video_recorder = VideoRecorder(
+                out_path=out_path, fps=fps, obs_rgb_key=obs_key
+            )
+            self._video_recorder.start()
+            log.info(
+                f"Video recording enabled: {out_path} (fps={fps}, obs_key={obs_key})"
+            )
+        except Exception as e:
+            log.warning(
+                f"Failed to start video recorder ({e}); disabling video recording"
+            )
+            self._video_recorder = None
+            self._record_video = False
