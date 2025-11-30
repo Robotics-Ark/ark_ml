@@ -71,6 +71,17 @@ def _build_pizero() -> BasePolicy:
 
     return PiZeroPolicyNode
 
+@register_policy("pi05")
+def _build_pi05() -> BasePolicy:
+    """Build and return a Pi05 policy node from config.
+
+    Returns:
+        Pi05Node.
+    """
+    from arkml.nodes.pi05_node import Pi05Node
+
+    return Pi05Node
+
 @register_policy("act")
 def _build_ACT():
     """Build and return ACT"""
