@@ -10,11 +10,13 @@ class DummyBackbone(nn.Module):
     A minimal working dummy backbone for Pi0.5.
     This is a placeholder that would be replaced with actual vision-language model.
     """
-    def __init__(self, hidden_dim: int = 512):
+    def __init__(self, hidden_dim: int = 512, image_dim: tuple = (3, 224, 224)):
         super().__init__()
         self.hidden_dim = hidden_dim
+        self.image_dim = image_dim
+        input_size = image_dim[0] * image_dim[1] * image_dim[2]
         # Simple linear projection as a placeholder
-        self.projection = nn.Linear(3 * 224 * 224, hidden_dim)  # Assuming flattened image input
+        self.projection = nn.Linear(input_size, hidden_dim)  # Using the actual image dimensions
         self.norm = nn.LayerNorm(hidden_dim)
 
     def forward(self, x):
@@ -141,7 +143,7 @@ class Pi05Policy(BasePolicy):
         self.fast_vocab_size = fast_vocab_size
 
         # Initialize the backbone and heads
-        self.backbone = DummyBackbone(hidden_dim)
+        self.backbone = DummyBackbone(hidden_dim, image_dim)
         self.subtask_head = nn.Linear(hidden_dim, vocab_size)
         self.fast_head = nn.Linear(hidden_dim, fast_vocab_size)
         self.flow_head = ActionFlowExpert(hidden_dim, action_dim)

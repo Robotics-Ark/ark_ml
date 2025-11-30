@@ -8,6 +8,47 @@ from arkml.utils.utils import _normalise_shape
 from omegaconf import DictConfig, OmegaConf
 
 
+def load_config(algo: str, preset: str, overrides: dict[str, Any] | None = None) -> DictConfig:
+    """
+    Load configuration for a specified algorithm and preset.
+
+    Args:
+        algo: Algorithm name (e.g., "pi05")
+        preset: Configuration preset name (e.g., "pi05_base")
+        overrides: Optional dictionary of parameter overrides
+
+    Returns:
+        Loaded configuration as a DictConfig
+    """
+    import os
+
+    # Construct paths to config files
+    algo_config_path = os.path.join(os.path.dirname(__file__), "..", "configs", "algo", f"{algo}.yaml")
+    data_config_path = os.path.join(os.path.dirname(__file__), "..", "configs", "data", f"{algo}_dataset.yaml")
+
+    # Load the algo config
+    algo_cfg = OmegaConf.load(algo_config_path)
+
+    # If there are data config overrides, we might need to load it too
+    # For simplicity, we'll merge the overrides into the algo config
+    if overrides:
+        for key, value in overrides.items():
+            # Split the key by dots to handle nested keys like "model.checkpoint"
+            keys = key.split('.')
+            target_cfg = algo_cfg
+
+            # Navigate to the nested config
+            for k in keys[:-1]:
+                if k not in target_cfg:
+                    target_cfg[k] = OmegaConf.create({})
+                target_cfg = target_cfg[k]
+
+            # Set the final value
+            target_cfg[keys[-1]] = value
+
+    return algo_cfg
+
+
 def _to_plain_dict(cfg: DictConfig | dict[str, Any]) -> dict[str, Any]:
     """
     Convert a DictConfig or mapping into a resolved plain dictionary.
