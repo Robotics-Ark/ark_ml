@@ -103,7 +103,10 @@ def test_pi05_policy_creation():
         obs_dim=10,
         action_dim=8,
         image_dim=(3, 224, 224),
-        pred_horizon=1
+        pred_horizon=1,
+        hidden_dim=512,
+        vocab_size=32000,
+        fast_vocab_size=1000
     )
     
     # Test that all required components exist

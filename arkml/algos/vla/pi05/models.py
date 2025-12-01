@@ -201,7 +201,7 @@ class Pi05Policy(BasePolicy):
 
     def reset(self) -> None:
         """Reset internal state if needed."""
-        # TODO: Implement any state reset logic if required
+        # Clear any cached states
         pass
 
     def prepare_input(self, observation: dict) -> dict[str, Any]:

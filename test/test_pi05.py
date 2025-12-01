@@ -63,7 +63,10 @@ class TestPi05Policy:
             obs_dim=10,
             action_dim=8,
             image_dim=(3, 224, 224),
-            pred_horizon=1
+            pred_horizon=1,
+            hidden_dim=512,
+            vocab_size=32000,
+            fast_vocab_size=1000
         )
         
         # Create dummy batch data
@@ -124,7 +127,10 @@ class TestPi05Trainer:
             obs_dim=10,
             action_dim=8,
             image_dim=(3, 224, 224),
-            pred_horizon=1
+            pred_horizon=1,
+            hidden_dim=512,
+            vocab_size=32000,
+            fast_vocab_size=1000
         )
         
         # Create a dummy dataset
@@ -185,7 +191,10 @@ class TestPi05Trainer:
             obs_dim=10,
             action_dim=8,
             image_dim=(3, 224, 224),
-            pred_horizon=1
+            pred_horizon=1,
+            hidden_dim=512,
+            vocab_size=32000,
+            fast_vocab_size=1000
         )
         
         # Create trainer (reuse creation from pretrain test)
@@ -241,7 +250,10 @@ class TestPi05Evaluator:
             obs_dim=10,
             action_dim=8,
             image_dim=(3, 224, 224),
-            pred_horizon=1
+            pred_horizon=1,
+            hidden_dim=512,
+            vocab_size=32000,
+            fast_vocab_size=1000
         )
         
         # Create evaluator (note: evaluator needs dataloader but we'll test methods separately)
@@ -267,7 +279,10 @@ class TestPi05Evaluator:
             obs_dim=10,
             action_dim=8,
             image_dim=(3, 224, 224),
-            pred_horizon=1
+            pred_horizon=1,
+            hidden_dim=512,
+            vocab_size=32000,
+            fast_vocab_size=1000
         )
         
         evaluator = Pi05Evaluator(model, None, "cpu")

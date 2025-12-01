@@ -20,12 +20,15 @@ def main():
 
     # Instantiate model
     model = Pi05Policy(
+        policy_type=config.model.get("policy_type", "pi05"),
         model_path=config.model.get("model_path", config.model.get("checkpoint", "")),
         obs_dim=config.model.get("obs_dim", 256),
-        action_dim=config.model.get("action_dim", 256),
-        image_dim=config.model.get("image_dim", 224),
-        flow_dim=config.model.get("flow_dim", 0),
-        preset=config.model.get("preset", "lerobot/pi0.5_base")
+        action_dim=config.model.get("action_dim", 8),  # Default to 8-dim actions
+        image_dim=config.model.get("image_dim", (3, 224, 224)),  # Updated to tuple format
+        pred_horizon=config.model.get("pred_horizon", 1),
+        hidden_dim=config.model.get("hidden_dim", 512),
+        vocab_size=config.model.get("vocab_size", 32000),
+        fast_vocab_size=config.model.get("fast_vocab_size", 1000)
     )
     model.to(device)
     model.eval()  # Set to evaluation mode for benchmarking
@@ -34,25 +37,33 @@ def main():
     # Generate synthetic input tensors
     batch_size = 1
     channels = 3
-    height = config.model.get("image_dim", 224)
-    width = config.model.get("image_dim", 224)
+    height = config.model.get("image_dim", (3, 224, 224))[1] if isinstance(config.model.get("image_dim"), tuple) else 224
+    width = config.model.get("image_dim", (3, 224, 224))[2] if isinstance(config.model.get("image_dim"), tuple) else 224
 
     # Create synthetic image tensor
     fake_images = torch.randn(batch_size, channels, height, width, dtype=torch.float32, device=device)
 
-    print(f"Synthetic inputs generated - Images: {fake_images.shape}")
+    # Create synthetic text input
+    fake_text = ["pick up the block"] * batch_size  # Repeat for batch
 
-    # Warmup iterations
+    print(f"Synthetic inputs generated - Images: {fake_images.shape}, Text: {fake_text}")
+
+    # Warmup iterations - now using observation dict with both image and instruction
     print("Starting warmup iterations...")
     for i in range(200):
         with torch.no_grad():
-            _ = model(fake_images)
+            # Pass observation dict with both image and instruction
+            observation = {
+                "image": fake_images,
+                "instruction": fake_text[0] if batch_size == 1 else fake_text
+            }
+            _ = model(observation)
         if i % 50 == 0:
             print(f"Warmup progress: {i}/200")
 
     print("Warmup completed. Starting timed benchmark...")
 
-    # Timed iterations
+    # Timed iterations - now using observation dict with both image and instruction
     latencies = []
     for i in range(500):
         if device.type == 'cuda':
@@ -61,7 +72,12 @@ def main():
         start_time = time.time()
 
         with torch.no_grad():
-            _ = model(fake_images)
+            # Pass observation dict with both image and instruction
+            observation = {
+                "image": fake_images,
+                "instruction": fake_text[0] if batch_size == 1 else fake_text
+            }
+            _ = model(observation)
 
         if device.type == 'cuda':
             torch.cuda.synchronize()

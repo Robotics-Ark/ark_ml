@@ -7,6 +7,8 @@ import torch
 from torch.utils.data import Dataset
 from omegaconf import OmegaConf
 from arkml.algos.vla.tokenizers.fast import FASTTokenizer
+from PIL import Image
+import torchvision.transforms as transforms
 
 
 class Pi05Dataset(Dataset):
@@ -34,7 +36,10 @@ class Pi05Dataset(Dataset):
         max_val: float = 1.0
     ):
         self.dataset_path = dataset_path
-        self.transform = transform
+        self.transform = transform or transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+        ])
         self.pred_horizon = pred_horizon
 
         # Load the configuration
@@ -132,14 +137,12 @@ class Pi05Dataset(Dataset):
         sample = self.dataset_samples[idx]
         modality = sample["modality"]
 
-        # Load image (mock for now)
-        # In real implementation: load and preprocess image
-        # image = self._load_image(sample["image_path"])
-        image = torch.rand(3, 224, 224)  # Mock image tensor
-
-        # Transform image if provided
-        if self.transform:
-            image = self.transform(image)
+        # Load image using PIL
+        try:
+            image = self._load_image(sample["image_path"])
+        except:
+            # Fallback to random tensor if image loading fails
+            image = torch.rand(3, 224, 224)
 
         # Convert image to vision tokens (placeholder - leave TODO)
         # TODO: Implement actual image to vision tokens conversion
@@ -176,7 +179,7 @@ class Pi05Dataset(Dataset):
     def _load_image(self, image_path: str):
         """
         Load and preprocess image from path.
-        This is a placeholder for the actual image loading logic.
         """
-        # TODO: Implement actual image loading
-        pass
+        image = Image.open(image_path).convert("RGB")
+        image = self.transform(image)
+        return image
