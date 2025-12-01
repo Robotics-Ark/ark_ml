@@ -5,6 +5,35 @@ from arkml.core.policy import BasePolicy
 from arkml.core.registry import MODELS
 
 
+class DummyTokenizer:
+    """A simple placeholder tokenizer that converts string to list of token IDs"""
+    
+    def __init__(self):
+        # Basic vocabulary mapping - could be extended
+        self.vocab = {
+            "<pad>": 0,
+            "<unk>": 1,
+            "<s>": 2,
+            "</s>": 3,
+        }
+        # Add common characters
+        for i, char in enumerate("abcdefghijklmnopqrstuvwxyz0123456789 .,!?;:"):
+            self.vocab[char] = len(self.vocab)
+    
+    def encode(self, text: str) -> list:
+        """Convert text to token IDs"""
+        tokens = []
+        for char in text.lower():
+            if char in self.vocab:
+                tokens.append(self.vocab[char])
+            else:
+                tokens.append(self.vocab["<unk>"])
+        return tokens
+
+    def __call__(self, text: str) -> list:
+        return self.encode(text)
+
+
 class DummyBackbone(nn.Module):
     """
     A minimal working dummy backbone for Pi0.5.
@@ -144,6 +173,12 @@ class Pi05Policy(BasePolicy):
 
         # Initialize the backbone and heads
         self.backbone = DummyBackbone(hidden_dim, image_dim)
+        
+        # Text processing components
+        self.tokenizer = DummyTokenizer()
+        self.text_embedding = nn.Embedding(1000, hidden_dim)  # Same embed_dim as vision
+        self.text_projection = nn.Linear(hidden_dim, hidden_dim)
+        
         self.subtask_head = nn.Linear(hidden_dim, vocab_size)
         self.fast_head = nn.Linear(hidden_dim, fast_vocab_size)
         self.flow_head = ActionFlowExpert(hidden_dim, action_dim)
@@ -173,7 +208,26 @@ class Pi05Policy(BasePolicy):
         """
         Prepare observation dict for model input.
         """
-        # TODO: Implement proper input preparation for Pi0.5
+        # Process text instruction if present
+        if "instruction" in observation:
+            instruction = observation["instruction"]
+            if isinstance(instruction, str):
+                # Tokenize the instruction
+                token_ids = self.tokenizer(instruction)
+                
+                # Pad or truncate to a fixed length
+                max_length = 128
+                if len(token_ids) > max_length:
+                    token_ids = token_ids[:max_length]
+                else:
+                    token_ids.extend([0] * (max_length - len(token_ids)))
+                
+                # Create tensor and add to observation
+                observation["instruction_tokens"] = torch.tensor(
+                    token_ids, dtype=torch.long, device=self.device
+                ).unsqueeze(0)  # Add batch dimension
+        
+        # Process other fields
         processed_obs = {}
         for k, v in observation.items():
             if torch.is_tensor(v):
@@ -182,11 +236,26 @@ class Pi05Policy(BasePolicy):
                 processed_obs[k] = v
         return processed_obs
 
+    def encode_text(self, token_ids: torch.Tensor) -> torch.Tensor:
+        """Encode text tokens into embeddings with mean pooling and projection"""
+        # Embed tokens - ensure tokens are on correct device
+        text_embs = self.text_embedding(token_ids.to(self.device))  # [batch, seq_len, embed_dim]
+        
+        # Mean pooling to get fixed-size representation
+        # Mask out padding tokens (assuming 0 is pad token)
+        mask = (token_ids != 0).float().unsqueeze(-1).to(self.device)  # [batch, seq_len, 1]
+        masked_embs = text_embs * mask
+        pooled_emb = masked_embs.sum(dim=1) / mask.sum(dim=1).clamp(min=1)  # [batch, embed_dim]
+        
+        # Project to hidden dimension
+        text_emb = self.text_projection(pooled_emb)  # [batch, hidden_dim]
+        
+        return text_emb
+
     def forward(self, observation) -> torch.Tensor:
         """
         Forward pass for training.
         """
-        # TODO: Implement full forward pass logic
         # Extract image from observation (this is a simplified version)
         if "image" in observation:
             img_input = observation["image"]
@@ -196,8 +265,44 @@ class Pi05Policy(BasePolicy):
             # Placeholder image tensor if not provided
             img_input = torch.rand(1, *self.image_dim, device=self.device)
 
-        # Pass through backbone
-        hidden_states = self.backbone(img_input)
+        # Pass through vision backbone
+        vision_emb = self.backbone(img_input)
+
+        # Process text if present
+        text_emb = None
+        if "instruction_tokens" in observation:
+            text_emb = self.encode_text(observation["instruction_tokens"])
+        elif "instruction" in observation and isinstance(observation["instruction"], str):
+            # Tokenize and process instruction string if not already tokenized
+            token_ids = self.tokenizer(observation["instruction"])
+            max_length = 128
+            if len(token_ids) > max_length:
+                token_ids = token_ids[:max_length]
+            else:
+                token_ids.extend([0] * (max_length - len(token_ids)))
+            instruction_tokens = torch.tensor(
+                token_ids, dtype=torch.long, device=self.device
+            ).unsqueeze(0)
+            text_emb = self.encode_text(instruction_tokens)
+        
+        # Fuse vision and text embeddings
+        if text_emb is not None:
+            # Ensure both embeddings have the same dimensions for addition
+            # Get the minimum dimension to avoid size mismatch
+            min_dim = min(vision_emb.shape[-1], text_emb.shape[-1])
+            # Expand or truncate to match dimensions if needed
+            vision_truncated = vision_emb[..., :min_dim]
+            text_truncated = text_emb[..., :min_dim]
+            
+            # Match batch dimensions if needed
+            if vision_truncated.shape[0] != text_truncated.shape[0]:
+                # If text has batch size 1 but vision has different batch size
+                if text_truncated.shape[0] == 1:
+                    text_truncated = text_truncated.expand(vision_truncated.shape[0], -1)
+            
+            hidden_states = vision_truncated + text_truncated
+        else:
+            hidden_states = vision_emb
 
         # Compute outputs from different heads
         subtask_logits = self.subtask_head(hidden_states)
@@ -251,7 +356,6 @@ class Pi05Policy(BasePolicy):
         """
         Predict action for a single observation.
         """
-        # TODO: Implement complete prediction logic
         obs = self.prepare_input(observation=obs)
 
         # Extract image for backbone
@@ -263,8 +367,43 @@ class Pi05Policy(BasePolicy):
             # Default tensor with proper shape
             img_input = torch.rand(1, *self.image_dim, device=self.device)
 
-        # Get hidden states from backbone
-        hidden_states = self.backbone(img_input)
+        # Get vision embeddings from backbone
+        vision_emb = self.backbone(img_input)
+
+        # Process text if present
+        text_emb = None
+        if "instruction_tokens" in obs:
+            text_emb = self.encode_text(obs["instruction_tokens"])
+        elif "instruction" in obs and isinstance(obs["instruction"], str):
+            # Tokenize and process instruction string if not already tokenized
+            token_ids = self.tokenizer(obs["instruction"])
+            max_length = 128
+            if len(token_ids) > max_length:
+                token_ids = token_ids[:max_length]
+            else:
+                token_ids.extend([0] * (max_length - len(token_ids)))
+            instruction_tokens = torch.tensor(
+                token_ids, dtype=torch.long, device=self.device
+            ).unsqueeze(0)
+            text_emb = self.encode_text(instruction_tokens)
+
+        # Fuse vision and text embeddings
+        if text_emb is not None:
+            # Ensure both embeddings have the same dimensions for addition
+            min_dim = min(vision_emb.shape[-1], text_emb.shape[-1])
+            # Truncate to matching dimensions
+            vision_truncated = vision_emb[..., :min_dim]
+            text_truncated = text_emb[..., :min_dim]
+            
+            # Match batch dimensions if needed
+            if vision_truncated.shape[0] != text_truncated.shape[0]:
+                # If text has batch size 1 but vision has different batch size
+                if text_truncated.shape[0] == 1:
+                    text_truncated = text_truncated.expand(vision_truncated.shape[0], -1)
+                    
+            hidden_states = vision_truncated + text_truncated
+        else:
+            hidden_states = vision_emb
 
         # Determine which prediction head to use based on training stage or config
         use_flow = kwargs.get('use_flow', True)  # Default to flow for action prediction
