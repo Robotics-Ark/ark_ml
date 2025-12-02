@@ -173,13 +173,19 @@ class Pi05Policy(BasePolicy):
 
         # Initialize the backbone and heads
         self.backbone = DummyBackbone(hidden_dim, image_dim)
-        
+
         # Text processing components
         self.tokenizer = DummyTokenizer()
-        self.text_embedding = nn.Embedding(1000, hidden_dim)  # Same embed_dim as vision
-        self.text_projection = nn.Linear(hidden_dim, hidden_dim)
-        
-        self.subtask_head = nn.Linear(hidden_dim, vocab_size)
+        # Calculate vocab size for the text embedding to match the dummy tokenizer
+        # Need to do this before defining the embedding layer
+        # The max token value in the tokenizer vocab is 46 ('z' = 46), but we use 128 to be safe for flexibility
+        text_embedding_vocab_size = 128  # Use larger vocab to be safe
+        text_embedding_dim = hidden_dim  # Use same embedding dim as hidden dim (512)
+        self.text_embedding = nn.Embedding(text_embedding_vocab_size, text_embedding_dim)  # vocab_size=128, embed_dim=512
+        self.text_projection = nn.Linear(text_embedding_dim, hidden_dim)  # Linear(512, 512)
+
+        # Use the original vocab_size for the subtask head (for compatibility with real models)
+        self.subtask_head = nn.Linear(hidden_dim, self.vocab_size)
         self.fast_head = nn.Linear(hidden_dim, fast_vocab_size)
         self.flow_head = ActionFlowExpert(hidden_dim, action_dim)
 
@@ -238,18 +244,26 @@ class Pi05Policy(BasePolicy):
 
     def encode_text(self, token_ids: torch.Tensor) -> torch.Tensor:
         """Encode text tokens into embeddings with mean pooling and projection"""
+        # Ensure we have the right number of dimensions
+        if token_ids.dim() == 1:
+            # Add batch dimension if missing: [seq_len] -> [1, seq_len]
+            token_ids = token_ids.unsqueeze(0)
+
         # Embed tokens - ensure tokens are on correct device
-        text_embs = self.text_embedding(token_ids.to(self.device))  # [batch, seq_len, embed_dim]
-        
+        text_embs = self.text_embedding(token_ids.to(self.device))  # [batch, seq_len, embed_dim_per_token]
+
+        # Get actual embedding dimension from the embedding layer
+        embed_dim_per_token = self.text_embedding.embedding_dim
+
         # Mean pooling to get fixed-size representation
         # Mask out padding tokens (assuming 0 is pad token)
         mask = (token_ids != 0).float().unsqueeze(-1).to(self.device)  # [batch, seq_len, 1]
         masked_embs = text_embs * mask
-        pooled_emb = masked_embs.sum(dim=1) / mask.sum(dim=1).clamp(min=1)  # [batch, embed_dim]
-        
-        # Project to hidden dimension
+        pooled_emb = masked_embs.sum(dim=1) / mask.sum(dim=1).clamp(min=1)  # [batch, embed_dim_per_token]
+
+        # Project to hidden dimension (512 in this case)
         text_emb = self.text_projection(pooled_emb)  # [batch, hidden_dim]
-        
+
         return text_emb
 
     def forward(self, observation) -> torch.Tensor:
@@ -328,8 +342,10 @@ class Pi05Policy(BasePolicy):
     def sample_subtask(self, hidden_states):
         """
         Sample a subtask using the subtask head.
+
+        Note: This is a placeholder implementation. Full subtask sampling
+        logic will be implemented in the complete Pi0.5 architecture.
         """
-        # TODO: Implement proper subtask sampling logic
         subtask_logits = self.subtask_head(hidden_states)
         # For now, just return raw logits
         return subtask_logits
@@ -337,8 +353,10 @@ class Pi05Policy(BasePolicy):
     def predict_with_fast(self, hidden_states, task_instruction: Optional[str] = None):
         """
         Predict actions using the FAST head.
+
+        Note: This is a placeholder implementation. Full FAST-based
+        action prediction will be implemented in the complete Pi0.5 architecture.
         """
-        # TODO: Implement FAST-based action prediction
         fast_logits = self.fast_head(hidden_states)
         # For now, just return raw logits
         return fast_logits
@@ -346,15 +364,16 @@ class Pi05Policy(BasePolicy):
     def predict_with_flow(self, hidden_states):
         """
         Predict actions using the flow head.
+
+        Uses the flow head's prediction method to generate actions.
         """
-        # TODO: Implement flow-based action prediction
-        # Use the predict method for inference
         flow_actions = self.flow_head.predict(hidden_states)
         return flow_actions
 
     def predict(self, obs: dict[str, Any], **kwargs) -> torch.Tensor:
         """
         Predict action for a single observation.
+        Real rollout implementation for inference-time control.
         """
         obs = self.prepare_input(observation=obs)
 
@@ -367,16 +386,38 @@ class Pi05Policy(BasePolicy):
             # Default tensor with proper shape
             img_input = torch.rand(1, *self.image_dim, device=self.device)
 
+        # Ensure correct device placement
+        img_input = img_input.to(self.device)
+
         # Get vision embeddings from backbone
         vision_emb = self.backbone(img_input)
 
         # Process text if present
         text_emb = None
-        if "instruction_tokens" in obs:
-            text_emb = self.encode_text(obs["instruction_tokens"])
+        if "instruction_tokens" in obs and obs["instruction_tokens"] is not None:
+            instruction_tokens = obs["instruction_tokens"]
+            # Ensure tokens are on correct device
+            instruction_tokens = instruction_tokens.to(self.device)
+            text_emb = self.encode_text(instruction_tokens)
+        elif "instruction" in obs and isinstance(obs["instruction"], torch.Tensor):
+            # Handle case where instruction is already tokenized as tensor
+            instruction_tokens = obs["instruction"].to(self.device)
+            text_emb = self.encode_text(instruction_tokens)
         elif "instruction" in obs and isinstance(obs["instruction"], str):
-            # Tokenize and process instruction string if not already tokenized
+            # Tokenize string instruction
             token_ids = self.tokenizer(obs["instruction"])
+            max_length = 128
+            if len(token_ids) > max_length:
+                token_ids = token_ids[:max_length]
+            else:
+                token_ids.extend([0] * (max_length - len(token_ids)))
+            instruction_tokens = torch.tensor(
+                token_ids, dtype=torch.long, device=self.device
+            ).unsqueeze(0)
+            text_emb = self.encode_text(instruction_tokens)
+        elif "language" in obs and isinstance(obs["language"], str):
+            # Handle case where language key is used instead of instruction
+            token_ids = self.tokenizer(obs["language"])
             max_length = 128
             if len(token_ids) > max_length:
                 token_ids = token_ids[:max_length]
@@ -394,13 +435,13 @@ class Pi05Policy(BasePolicy):
             # Truncate to matching dimensions
             vision_truncated = vision_emb[..., :min_dim]
             text_truncated = text_emb[..., :min_dim]
-            
+
             # Match batch dimensions if needed
             if vision_truncated.shape[0] != text_truncated.shape[0]:
                 # If text has batch size 1 but vision has different batch size
                 if text_truncated.shape[0] == 1:
                     text_truncated = text_truncated.expand(vision_truncated.shape[0], -1)
-                    
+
             hidden_states = vision_truncated + text_truncated
         else:
             hidden_states = vision_emb
@@ -416,8 +457,10 @@ class Pi05Policy(BasePolicy):
     def predict_n_actions(self, obs: dict[str, Any], n_actions: int = 10) -> torch.Tensor:
         """
         Generate and return a sequence of `n_actions` actions.
+
+        Note: For sequential action prediction, the state should be updated after each action.
+        This is a simplified implementation that reuses the same observation.
         """
-        # TODO: Implement multi-action prediction
         actions = []
         for i in range(n_actions):
             # For simplicity, we'll reuse the same observation

@@ -77,7 +77,8 @@ def main():
                 "image": fake_images,
                 "instruction": fake_text[0] if batch_size == 1 else fake_text
             }
-            _ = model(observation)
+            # Use the predict method for consistent forward signature
+            _ = model.predict(observation)
 
         if device.type == 'cuda':
             torch.cuda.synchronize()
