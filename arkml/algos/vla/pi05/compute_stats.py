@@ -1,79 +1,145 @@
-import torch
+import argparse
+import json
+import os
+import pickle
+from pathlib import Path
+from typing import Any
+
 import numpy as np
-from torch.utils.data import DataLoader
-from arkml.algos.vla.pi05.dataset import Pi05Dataset
+
+from arkml.utils.stats import (
+    _init_state,
+    sample_indices,
+    _accumulate_moments,
+    _finalize_stats,
+)
+
+from arkml.core.app_context import ArkMLContext
 
 
-def compute_pi05_stats(dataset_path, *, obs_dim: int, action_dim: int, image_channels: int, sample_images_only: bool = True):
-    """
-    Compute statistics for Pi0.5 dataset.
+def _iter_trajectories(dataset_path: str):
+    files = sorted(
+        [
+            os.path.join(dataset_path, f)
+            for f in os.listdir(dataset_path)
+            if f.endswith(".pkl")
+        ]
+    )
+    for fpath in files:
+        with open(fpath, "rb") as f:
+            traj_list = pickle.load(f)
+            for traj in traj_list:
+                yield traj
 
-    Computes:
-    - mean/std of pixel values
-    - mean/std of actions
-    - episode length distribution
-    """
-    # Initialize dataset
-    dataset = Pi05Dataset(dataset_path)
 
-    # Create a small dataloader to sample data
-    dataloader = DataLoader(dataset, batch_size=32, shuffle=False)
+def compute_pi05_stats(
+    dataset_path: str,
+    *,
+    obs_dim: int = 9,
+    action_dim: int = 8,
+    image_channels: int = 3,
+    sample_images_only: bool = True,
+    image_base_index: int = 9,
+) -> dict[str, dict[str, Any]]:
+    # Use the same logic for stats computation as the underlying algorithm requires
+    trajectories = list(_iter_trajectories(dataset_path))
+    visual_input_features = ArkMLContext.visual_input_features
+    if not trajectories:
+        raise FileNotFoundError(f"No trajectories found in {dataset_path}")
 
-    # Collect pixel values for mean/std computation
-    pixel_values = []
-    actions_list = []
-    lengths = []
+    accumulators: dict[str, dict[str, Any]] = {}
+    accumulators["observation.state"] = _init_state((obs_dim,), dtype=np.float64)
+    accumulators["action"] = _init_state((action_dim,), dtype=np.float64)
+    for cam_name in visual_input_features:
+        key = f"observation.images.{cam_name}"
+        accumulators[key] = _init_state((image_channels,), dtype=np.float64)
 
-    for batch_idx, batch in enumerate(dataloader):
-        if batch_idx >= 10:  # Limit to first 10 batches for efficiency
-            break
+    sample_idxs = (
+        set(sample_indices(len(trajectories)))
+        if sample_images_only
+        else set(range(len(trajectories)))
+    )
 
-        # Extract image data if available
-        if "prefix_tokens" in batch and batch["prefix_tokens"] is not None:
-            # For now, get a sample from the batch - note that prefix_tokens contains vision+language tokens
-            # For pixel statistics, we need the original image data which may not be available in this format
-            pass
+    for idx, traj in enumerate(trajectories):
+        state_block = np.asarray(
+            traj["state"][6], dtype=np.float64
+        )  # TODO handle proper index based on data collection pipeline
+        _accumulate_moments(
+            state_block.reshape(1, -1), accumulators["observation.state"]
+        )
 
-        # Extract continuous actions if available
-        if "actions_cont" in batch and batch["actions_cont"] is not None and batch["actions_cont"].numel() > 0:
-            actions = batch["actions_cont"]
-            if actions.numel() > 0:
-                actions_list.append(actions.flatten())
+        action = np.asarray(traj["action"], dtype=np.float64)
+        if action.ndim == 1:
+            action = action.reshape(1, -1)
+        _accumulate_moments(action, accumulators["action"])
 
-        # Calculate lengths from available data
-        lengths.append(batch["prefix_tokens"].size(0) if "prefix_tokens" in batch else 1)
+        if sample_images_only and idx not in sample_idxs:
+            continue
 
-    stats = {}
+        for cam_idx, cam_name in enumerate(visual_input_features):
+            image_value = traj.get(cam_name)
+            if image_value is None:
+                state_values = traj.get("state")
+                if state_values is not None:
+                    image_index = image_base_index + cam_idx
+                    if len(state_values) > image_index:
+                        image_value = state_values[image_index]
+            if image_value is None:
+                raise KeyError(f"Image data for '{cam_name}' not found in trajectory")
 
-    # Compute action statistics if actions are available
-    if actions_list:
-        all_actions = torch.cat(actions_list, dim=0)
-        stats['action_mean'] = all_actions.mean().item()
-        stats['action_std'] = all_actions.std().item()
-        stats['action_min'] = all_actions.min().item()
-        stats['action_max'] = all_actions.max().item()
-    else:
-        stats['action_mean'] = 0.0
-        stats['action_std'] = 0.0
-        stats['action_min'] = 0.0
-        stats['action_max'] = 0.0
+            img = np.asarray(image_value, dtype=np.float64)
+            if img.max() > 1.0:
+                img = img / 255.0
+            channels = img.reshape(-1, image_channels)
+            accum_key = f"observation.images.{cam_name}"
+            _accumulate_moments(channels, accumulators[accum_key])
 
-    # Compute episode length statistics
-    if lengths:
-        stats['episode_lengths_mean'] = np.mean(lengths)
-        stats['episode_lengths_std'] = np.std(lengths)
-        stats['episode_lengths_min'] = np.min(lengths)
-        stats['episode_lengths_max'] = np.max(lengths)
-    else:
-        stats['episode_lengths_mean'] = 0.0
-        stats['episode_lengths_std'] = 0.0
-        stats['episode_lengths_min'] = 0.0
-        stats['episode_lengths_max'] = 0.0
+    stats = {key: _finalize_stats(acc) for key, acc in accumulators.items()}
 
-    # For pixel statistics, we need different approach since we may not have raw images
-    # We'll use synthetic data to show the structure
-    stats['pixel_mean'] = 0.0  # Placeholder - real implementation would load actual images
-    stats['pixel_std'] = 1.0   # Placeholder - real implementation would load actual images
+    for cam_name in visual_input_features:
+        key = f"observation.images.{cam_name}"
+        for stat_key in ("mean", "std", "min", "max"):
+            stats[key][stat_key] = stats[key][stat_key].reshape(image_channels, 1, 1)
 
     return stats
 
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Compute Pi05 dataset stats (configurable cameras)"
+    )
+    parser.add_argument("--dataset_path", type=str, required=True)
+    parser.add_argument("--out", type=str, required=True)
+    parser.add_argument(
+        "--full_images",
+        action="store_true",
+        help="Process every trajectory image instead of sampling",
+    )
+    parser.add_argument(
+        "--visual_input_features",
+        type=str,
+        default=None,
+        help="Camera list (JSON string) or path to YAML fragment",
+    )
+    args = parser.parse_args()
+
+    stats = compute_pi05_stats(
+        args.dataset_path,
+        visual_input_features=args.visual_input_features,
+        sample_images_only=not args.full_images,
+    )
+
+    serializable = {
+        k: {kk: vv.tolist() for kk, vv in d.items()} for k, d in stats.items()
+    }
+
+    out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w") as f:
+        json.dump(serializable, f, indent=2)
+
+    print(f"Wrote stats to {out_path}")
+
+
+if __name__ == "__main__":
+    main()

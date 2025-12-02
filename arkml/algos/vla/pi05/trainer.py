@@ -1,34 +1,46 @@
 import os
+from datetime import datetime
+from typing import Any
+
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.data import DataLoader
 from contextlib import nullcontext
 from arkml.core.algorithm import Trainer
 from arkml.core.policy import BasePolicy
-from arkml.algos.vla.pi05.models import flow_matching_loss
+from torch.utils.data import DataLoader
 from tqdm import tqdm
+from .evaluator import Pi05Evaluator
 
 
 class Pi05Trainer(Trainer):
-    """
-    Trainer class for Pi0.5 with stage-based training.
+    """Initialize the Pi05 trainer.
+
+    Args:
+      model: Policy/model to train.
+      dataloader: Training dataloader yielding batches compatible with the model's `forward`.
+      device: Device identifier or torch.device (e.g., "cuda", "cpu").
+      lr: Learning rate for the AdamW optimizer.
+      weight_decay: Weight decay coefficient for AdamW.
+      num_epochs: Number of epochs to train.
+      grad_accum: Gradient accumulation steps.
+      output_dir: Directory where training artifacts (checkpoints) are written.
+      use_bf16: If True, use bfloat16 autocast; otherwise use fp16 autocast (CUDA only).
+      val_dataloader: Optional validation dataloader for periodic evaluation.
+      eval_every: Run evaluation every N epochs (default: 1).
     """
 
     def __init__(
         self,
         model: BasePolicy,
         dataloader: DataLoader,
-        device: str,
+        device: Any,
         lr: float,
         weight_decay: float,
         num_epochs: int,
         grad_accum: float,
         output_dir: str,
         use_bf16: bool,
-        flow_alpha: float = 10.0,  # Weight for flow matching loss
         *,
-        val_dataloader = None,
+        val_dataloader: DataLoader | None = None,
         eval_every: int = 1,
     ):
         self.model = model.to_device(device)
@@ -39,12 +51,8 @@ class Pi05Trainer(Trainer):
         self.num_epochs = num_epochs
         self.grad_accum = max(1, int(grad_accum))
         self.output_dir = output_dir
-        self.flow_alpha = flow_alpha  # Weight for flow matching loss
-
-        # Get trainable parameters
         self.trainable_params = self.model.get_trainable_params()
 
-        # Create optimizer
         self.optimizer = torch.optim.AdamW(
             self.trainable_params, lr=lr, weight_decay=weight_decay
         )
@@ -63,78 +71,32 @@ class Pi05Trainer(Trainer):
             enabled=(self.device_type == "cuda" and not self.use_bf16)
         )
 
-    def train_step_pretrain(self, batch):
+    def fit(self, *args, **kwargs) -> dict[str, Any]:
         """
-        Training step for pretraining stage:
-        CE(text) + CE(FAST tokens)
+        Run the training loop and return summary metrics.
+
+        Returns:
+            A summary dictionary with:
+              - global_steps: Optimizer step count
+              - best_metric_name: "val_loss" if val loader provided, else "train_loss"
+              - best_loss: Best metric value observed
+              - best_ckpt: Path to best checkpoint directory
         """
-        # Extract relevant tensors from batch
-        prefix_tokens = batch.get("prefix_tokens", None)
-        target_tokens = batch.get("target_tokens", None)
-        modality = batch.get("modality", None)
-        actions_cont = batch.get("actions_cont", None)
 
-        # Calculate cross-entropy loss for text tokens (subtask/qa/etc.)
-        text_loss = 0.0
-        if prefix_tokens is not None and target_tokens is not None:
-            # Use a simple approach where prefix_tokens are used to predict target_tokens
-            # This would require the model to have a text prediction head
-            # For now, we'll focus on the FAST token loss
-            pass
-
-        # Calculate cross-entropy loss for FAST tokens if this is a robot action modality
-        fast_loss = 0.0
-        if modality is not None and actions_cont is not None:
-            # Forward pass
-            loss = self.model.forward(batch)
-            # The model's forward method already handles the loss calculation
-            # For pretrain, this would be based on FAST token prediction
-            fast_loss = loss
-
-        # Total pretrain loss
-        total_loss = fast_loss
-
-        return total_loss
-
-    def train_step_posttrain(self, batch):
-        """
-        Training step for posttraining stage:
-        CE(subtask) + alpha * flow_matching_loss
-        """
-        # Extract relevant tensors from batch
-        prefix_tokens = batch.get("prefix_tokens", None)
-        target_tokens = batch.get("target_tokens", None)
-        modality = batch.get("modality", None)
-        actions_cont = batch.get("actions_cont", None)
-
-        # Get model prediction
-        loss = self.model.forward(batch)
-
-        # The model forward already includes flow matching loss when action is provided
-        # We need to separately compute the subtask loss if applicable
-        subtask_loss = 0.0
-        flow_loss = 0.0
-
-        # Extract flow loss specifically if we have action data
-        if modality is not None and "action" in batch and actions_cont is not None:
-            # This would be handled in the model's forward pass
-            # For posttrain, we want to ensure flow matching loss is properly weighted
-            pass
-
-        # Total posttrain loss: subtask_loss + alpha * flow_loss
-        # For now, we'll use the loss from the model forward pass
-        # In a full implementation, we'd separate the losses
-        total_loss = loss
-
-        return total_loss
-
-    def train(self, stage: str = "pretrain"):
-        """
-        Main training loop that switches behavior based on training stage.
-        """
         self.model.set_train_mode()
+        global_steps = 0
+        best_metric = float("inf")
+        best_ckpt_path = None
 
-        for epoch in range(self.num_epochs):
+        date_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        ckpt_dir = os.path.join(self.output_dir, date_str)
+        os.makedirs(ckpt_dir, exist_ok=True)
+
+        best_metric_name = (
+            "val_loss" if self.val_dataloader is not None else "train_loss"
+        )
+
+        for epoch in tqdm(range(self.num_epochs)):
             epoch_loss = 0.0
             num_batches = 0
 
@@ -143,7 +105,7 @@ class Pi05Trainer(Trainer):
             progress_bar = tqdm(
                 enumerate(self.dataloader),
                 total=len(self.dataloader),
-                desc=f"{stage} Epoch {epoch + 1}/{self.num_epochs}",
+                desc=f"Epoch {epoch + 1}/{self.num_epochs}",
                 leave=False,
             )
 
@@ -160,13 +122,8 @@ class Pi05Trainer(Trainer):
                     )
 
                 with ac:
-                    if stage == "pretrain":
-                        loss = self.train_step_pretrain(batch)
-                    elif stage == "posttrain":
-                        loss = self.train_step_posttrain(batch)
-                    else:
-                        # Default to pretrain behavior for unknown stages
-                        loss = self.train_step_pretrain(batch)
+                    out = self.model.forward(batch)
+                    loss = out if torch.is_tensor(out) else out[0]
 
                 # Gradient accumulation
                 loss_to_backprop = loss / self.grad_accum
@@ -194,60 +151,42 @@ class Pi05Trainer(Trainer):
                         self.optimizer.step()
 
                     self.optimizer.zero_grad(set_to_none=True)
+                    global_steps += 1
 
                 epoch_loss += float(loss.item())
                 num_batches += 1
 
-                progress_bar.set_postfix({"loss": loss.item()})
+            avg_train_loss = epoch_loss / max(1, num_batches)
+            print(f"[epoch {epoch + 1}] train_loss={avg_train_loss:.6f}")
 
-            avg_epoch_loss = epoch_loss / max(1, num_batches)
-            print(f"[{stage} epoch {epoch + 1}] loss={avg_epoch_loss:.6f}")
+            # Optional validation
+            current_metric = avg_train_loss
+            if self.val_dataloader is not None and ((epoch + 1) % self.eval_every == 0):
+                self.model.set_eval_mode()
+                evaluator = Pi05Evaluator(
+                    model=self.model, dataloader=self.val_dataloader, device=self.device
+                )
+                val_metrics = evaluator.evaluate()
+                val_loss = float(val_metrics.get("val_loss", float("inf")))
+                print(
+                    f"[epoch {epoch + 1}] val_loss={val_loss:.6f} over {val_metrics.get('batches', 0)} batches"
+                )
+                current_metric = val_loss
+                self.model.set_train_mode()
 
-    def save_checkpoints(self, epoch: int):
-        """
-        Save backbone and flow expert checkpoints separately.
-        """
-        # Create epoch-specific directory
-        epoch_dir = os.path.join(self.output_dir, f"epoch_{epoch}")
-        os.makedirs(epoch_dir, exist_ok=True)
+            # Save best checkpoint
+            if current_metric < best_metric:
+                print(
+                    f"[epoch {epoch + 1}] New best {best_metric_name} {current_metric:.6f} (prev {best_metric:.6f})"
+                )
+                best_metric = current_metric
+                best_ckpt_path = os.path.join(ckpt_dir, f"best_epoch{epoch + 1}")
+                self.model.save_policy(best_ckpt_path)
+                print(f"[checkpoint] Saved new best checkpoint to {best_ckpt_path}")
 
-        # Save backbone separately
-        backbone_path = os.path.join(epoch_dir, "backbone.pth")
-        if hasattr(self.model, 'backbone'):
-            torch.save(self.model.backbone.state_dict(), backbone_path)
-            print(f"[checkpoint] Saved backbone to {backbone_path}")
-
-        # Save flow expert separately
-        flow_expert_path = os.path.join(epoch_dir, "flow_expert.pth")
-        if hasattr(self.model, 'flow_head'):
-            torch.save(self.model.flow_head.state_dict(), flow_expert_path)
-            print(f"[checkpoint] Saved flow expert to {flow_expert_path}")
-
-        # Save full model
-        full_model_path = os.path.join(epoch_dir, "full_model.pth")
-        torch.save(self.model.state_dict(), full_model_path)
-        print(f"[checkpoint] Saved full model to {full_model_path}")
-
-    def fit(self, *args, **kwargs):
-        """
-        Run the complete training process based on training stage from config.
-        """
-        # Get training stage from model config or use default
-        training_stage = getattr(self.model, 'training_stage', 'pretrain')
-
-        print(f"Starting training in {training_stage} stage")
-
-        # Perform training based on stage
-        if training_stage == "pretrain":
-            self.train(stage="pretrain")
-        elif training_stage == "posttrain":
-            self.train(stage="posttrain")
-        else:
-            # Handle combined training if needed
-            print(f"Unknown stage {training_stage}, defaulting to pretrain")
-            self.train(stage="pretrain")
-
-        # Save final checkpoints
-        self.save_checkpoints("final")
-
-        return {"status": "completed", "final_stage": training_stage}
+        return {
+            "global_steps": global_steps,
+            "best_metric_name": best_metric_name,
+            "best_loss": best_metric,
+            "best_ckpt": best_ckpt_path,
+        }

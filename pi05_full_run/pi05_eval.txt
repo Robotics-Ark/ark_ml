@@ -1,0 +1,3 @@
+FAILED at step A - ModuleNotFoundError: No module named 'lerobot.policies.normalize'
+Evaluation step could not be executed due to missing dependencies.
+Required dependencies (lerobot library) are not available in the current environment.

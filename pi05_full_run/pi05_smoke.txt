@@ -1,0 +1,3 @@
+FAILED at step A - ModuleNotFoundError: No module named 'lerobot.policies.normalize'
+Required dependencies (lerobot library) are not available in the current environment.
+The Pi05Net model requires external dependencies from the lerobot package that are not installed.

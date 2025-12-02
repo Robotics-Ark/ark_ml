@@ -1,151 +1,32 @@
-from typing import Any, Optional
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+import numpy as np
 import torch
 import torch.nn as nn
 from arkml.core.policy import BasePolicy
 from arkml.core.registry import MODELS
+from arkml.utils.utils import print_trainable_summary
+from lerobot.configs.types import FeatureType, PolicyFeature
+from lerobot.policies.normalize import Normalize, Unnormalize
+from lerobot.policies.pi05.modeling_pi05 import PI05Policy
+from torch import tensor
+
+from arkml.core.app_context import ArkMLContext
 
 
-class DummyTokenizer:
-    """A simple placeholder tokenizer that converts string to list of token IDs"""
-    
-    def __init__(self):
-        # Basic vocabulary mapping - could be extended
-        self.vocab = {
-            "<pad>": 0,
-            "<unk>": 1,
-            "<s>": 2,
-            "</s>": 3,
-        }
-        # Add common characters
-        for i, char in enumerate("abcdefghijklmnopqrstuvwxyz0123456789 .,!?;:"):
-            self.vocab[char] = len(self.vocab)
-    
-    def encode(self, text: str) -> list:
-        """Convert text to token IDs"""
-        tokens = []
-        for char in text.lower():
-            if char in self.vocab:
-                tokens.append(self.vocab[char])
-            else:
-                tokens.append(self.vocab["<unk>"])
-        return tokens
-
-    def __call__(self, text: str) -> list:
-        return self.encode(text)
-
-
-class DummyBackbone(nn.Module):
+@MODELS.register("Pi05Net")
+class Pi05Net(BasePolicy):
     """
-    A minimal working dummy backbone for Pi0.5.
-    This is a placeholder that would be replaced with actual vision-language model.
-    """
-    def __init__(self, hidden_dim: int = 512, image_dim: tuple = (3, 224, 224)):
-        super().__init__()
-        self.hidden_dim = hidden_dim
-        self.image_dim = image_dim
-        input_size = image_dim[0] * image_dim[1] * image_dim[2]
-        # Simple linear projection as a placeholder
-        self.projection = nn.Linear(input_size, hidden_dim)  # Using the actual image dimensions
-        self.norm = nn.LayerNorm(hidden_dim)
+    VLA Pi05 policy wrapper that uses explicit lerobot policies with a switchable type models of that kind.
 
-    def forward(self, x):
-        # Flatten and project input
-        batch_size = x.size(0)
-        x = x.view(batch_size, -1)  # Flatten image
-        x = self.projection(x)
-        x = self.norm(x)
-        return x
-
-
-class ActionFlowExpert(nn.Module):
-    """
-    Action Flow Expert module for Pi0.5.
-    Handles action prediction using flow matching approach.
-    """
-    def __init__(self, hidden_dim: int, action_dim: int):
-        super().__init__()
-        self.hidden_dim = hidden_dim
-        self.action_dim = action_dim
-
-        # Vector field network: predicts the flow direction given hidden state and target
-        self.vector_field = nn.Sequential(
-            nn.Linear(hidden_dim + action_dim, hidden_dim // 2),
-            nn.ReLU(),
-            nn.Linear(hidden_dim // 2, hidden_dim // 4),
-            nn.ReLU(),
-            nn.Linear(hidden_dim // 4, action_dim)
-        )
-
-    def forward(self, hidden_states, target_action=None):
-        """
-        Forward pass for flow matching.
-
-        Args:
-            hidden_states: Hidden representations from backbone
-            target_action: Target action for training (optional for inference)
-
-        Returns:
-            If target_action provided: flow vector
-            Otherwise: predicted action
-        """
-        if target_action is not None:
-            # For training: compute flow vector
-            combined_input = torch.cat([hidden_states, target_action], dim=-1)
-            flow_vector = self.vector_field(combined_input)
-            return flow_vector
-        else:
-            # For inference: return a prediction based on just the hidden state
-            # Use a simple approach by conditioning on a zero target
-            dummy_target = torch.zeros_like(hidden_states[..., :self.action_dim])
-            combined_input = torch.cat([hidden_states, dummy_target], dim=-1)
-            flow_vector = self.vector_field(combined_input)
-            return flow_vector
-
-    def predict(self, initial_state, steps: int = 10, step_size: float = 0.1):
-        """
-        Predict action sequence using Euler integration.
-
-        Args:
-            initial_state: Starting hidden state
-            steps: Number of integration steps
-            step_size: Size of each integration step
-
-        Returns:
-            Predicted action trajectory
-        """
-        # Start with an initial action guess (zeros)
-        current_action = torch.zeros(initial_state.size(0), self.action_dim,
-                                   device=initial_state.device, dtype=initial_state.dtype)
-
-        for _ in range(steps):
-            # Compute flow vector using current action estimate
-            combined_input = torch.cat([initial_state, current_action], dim=-1)
-            flow_vector = self.vector_field(combined_input)
-
-            # Euler integration step
-            current_action = current_action + step_size * flow_vector
-
-        return current_action
-
-
-def flow_matching_loss(pred, target):
-    """
-    Compute flow matching loss between predicted and target actions.
-
-    Args:
-        pred: Predicted flow vectors or actions
-        target: Target flow vectors or actions
-
-    Returns:
-        Scalar loss value (MSE loss)
-    """
-    return torch.mean((pred - target) ** 2)
-
-
-@MODELS.register("Pi05Policy")
-class Pi05Policy(BasePolicy):
-    """
-    VLA Pi0.5 policy implementing multiple prediction heads.
+    - policy_type: 'pi05'
+    - pretrained_model: HF hub id or local path. If None, uses a sensible default per type.
+    - Numeric state only is supported out-of-the-box (passed as 'observation.state').
+      To use image-based policies like Pi05, pass a full observation dict with
+      the required image tensors and task string.
     """
 
     def __init__(
@@ -156,342 +37,218 @@ class Pi05Policy(BasePolicy):
         action_dim: int,
         image_dim: tuple,
         pred_horizon: int = 1,
-        hidden_dim: int = 512,
-        vocab_size: int = 32000,  # Typical vocab size for language models
-        fast_vocab_size: int = 1000,  # FAST tokenizer vocab size,
     ):
         super().__init__()
-        self.policy_type = policy_type
-        self.model_path = model_path
         self.obs_dim = obs_dim
         self.action_dim = action_dim
         self.image_dim = image_dim
-        self.pred_horizon = pred_horizon
-        self.hidden_dim = hidden_dim
-        self.vocab_size = vocab_size
-        self.fast_vocab_size = fast_vocab_size
+        self.device = None
 
-        # Initialize the backbone and heads
-        self.backbone = DummyBackbone(hidden_dim, image_dim)
+        kind = policy_type.lower()
+        if kind != "pi05":
+            raise ValueError(f"Unsupported policy_type '{policy_type}'. Use 'pi05'.")
 
-        # Text processing components
-        self.tokenizer = DummyTokenizer()
-        # Calculate vocab size for the text embedding to match the dummy tokenizer
-        # Need to do this before defining the embedding layer
-        # The max token value in the tokenizer vocab is 46 ('z' = 46), but we use 128 to be safe for flexibility
-        text_embedding_vocab_size = 128  # Use larger vocab to be safe
-        text_embedding_dim = hidden_dim  # Use same embedding dim as hidden dim (512)
-        self.text_embedding = nn.Embedding(text_embedding_vocab_size, text_embedding_dim)  # vocab_size=128, embed_dim=512
-        self.text_projection = nn.Linear(text_embedding_dim, hidden_dim)  # Linear(512, 512)
+        if model_path is None:
+            model_path = "lerobot/pi05_base"
 
-        # Use the original vocab_size for the subtask head (for compatibility with real models)
-        self.subtask_head = nn.Linear(hidden_dim, self.vocab_size)
-        self.fast_head = nn.Linear(hidden_dim, fast_vocab_size)
-        self.flow_head = ActionFlowExpert(hidden_dim, action_dim)
+        self._policy = PI05Policy.from_pretrained(model_path)
 
-        # Store device for later use
-        self.device = torch.device("cpu")
+        self._policy.config.n_action_steps = pred_horizon
+        self._load_input_output_features()
 
     def to_device(self, device: str) -> Any:
-        """Move the model to specified device."""
-        self.device = torch.device(device)
-        return self.to(self.device)
+        """
+        Move the underlying policy to a device and return self.
+        Args:
+            device: Target device identifier (e.g., "cuda", "cpu").
+
+        Returns:
+            Pi05Net: This instance, for method chaining.
+
+        """
+        self.device = device
+        self._policy.to(device)
+        return self
 
     def set_eval_mode(self) -> None:
-        """Set the model to evaluation mode."""
-        self.eval()
+        """
+        Set the underlying policy to evaluation mode.
+        """
+        self._policy.eval()
 
     def set_train_mode(self) -> None:
-        """Set the model to training mode."""
-        self.train()
+        """
+        Set the underlying policy to training mode.
+        """
+        self._policy.train()
 
     def reset(self) -> None:
-        """Reset internal state if needed."""
-        # Clear any cached states
-        pass
+        """
+        Reset internal policy state.
+        """
+        self._policy.reset()
 
     def prepare_input(self, observation: dict) -> dict[str, Any]:
         """
-        Prepare observation dict for model input.
+        Convert an observation dict into the policy's expected input format.
+
+        Expected keys in `observation`:
+            - "image": torch.Tensor of shape (B, C, H, W)
+            - "state": torch.Tensor of shape (B, state_dim)
+            - "task": str task prompt or instruction
+            - "action" (optional): torch.Tensor of shape (B, action_dim)
+
+        Args:
+            observation: Raw observation dictionary.
+
+        Returns:
+            Processed observation with keys:
+                - "observation.images.image": torch.Tensor on `self.device`
+                - "observation.state": torch.Tensor on `self.device`
+                - "task": str (unchanged)
+                - "action": torch.Tensor on `self.device` (if present)
         """
-        # Process text instruction if present
-        if "instruction" in observation:
-            instruction = observation["instruction"]
-            if isinstance(instruction, str):
-                # Tokenize the instruction
-                token_ids = self.tokenizer(instruction)
-                
-                # Pad or truncate to a fixed length
-                max_length = 128
-                if len(token_ids) > max_length:
-                    token_ids = token_ids[:max_length]
-                else:
-                    token_ids.extend([0] * (max_length - len(token_ids)))
-                
-                # Create tensor and add to observation
-                observation["instruction_tokens"] = torch.tensor(
-                    token_ids, dtype=torch.long, device=self.device
-                ).unsqueeze(0)  # Add batch dimension
-        
-        # Process other fields
-        processed_obs = {}
+        obs = {}
         for k, v in observation.items():
-            if torch.is_tensor(v):
-                processed_obs[k] = v.to(self.device)
-            else:
-                processed_obs[k] = v
-        return processed_obs
+            if k == "state":
+                obs["observation.state"] = v.to(self.device)
+            elif k == "task":
+                obs["task"] = v
+            elif k in {"action", "action_is_pad"}:
+                obs[k] = v.to(self.device)
+            elif k in ArkMLContext.visual_input_features:
+                obs[f"observation.images.{k}"] = v.to(self.device)
+        return obs
 
-    def encode_text(self, token_ids: torch.Tensor) -> torch.Tensor:
-        """Encode text tokens into embeddings with mean pooling and projection"""
-        # Ensure we have the right number of dimensions
-        if token_ids.dim() == 1:
-            # Add batch dimension if missing: [seq_len] -> [1, seq_len]
-            token_ids = token_ids.unsqueeze(0)
-
-        # Embed tokens - ensure tokens are on correct device
-        text_embs = self.text_embedding(token_ids.to(self.device))  # [batch, seq_len, embed_dim_per_token]
-
-        # Get actual embedding dimension from the embedding layer
-        embed_dim_per_token = self.text_embedding.embedding_dim
-
-        # Mean pooling to get fixed-size representation
-        # Mask out padding tokens (assuming 0 is pad token)
-        mask = (token_ids != 0).float().unsqueeze(-1).to(self.device)  # [batch, seq_len, 1]
-        masked_embs = text_embs * mask
-        pooled_emb = masked_embs.sum(dim=1) / mask.sum(dim=1).clamp(min=1)  # [batch, embed_dim_per_token]
-
-        # Project to hidden dimension (512 in this case)
-        text_emb = self.text_projection(pooled_emb)  # [batch, hidden_dim]
-
-        return text_emb
-
-    def forward(self, observation) -> torch.Tensor:
+    def predict(self, obs: dict[str, Any], **kwargs) -> tensor:
         """
-        Forward pass for training.
-        """
-        # Extract image from observation (this is a simplified version)
-        if "image" in observation:
-            img_input = observation["image"]
-        elif "observation.images.image" in observation:
-            img_input = observation["observation.images.image"]
-        else:
-            # Placeholder image tensor if not provided
-            img_input = torch.rand(1, *self.image_dim, device=self.device)
+        Select an action for a single observation.
+        Args:
+            obs: Observation dictionary
+            **kwargs: Additional keyword arguments forwarded to `select_action`.
 
-        # Pass through vision backbone
-        vision_emb = self.backbone(img_input)
-
-        # Process text if present
-        text_emb = None
-        if "instruction_tokens" in observation:
-            text_emb = self.encode_text(observation["instruction_tokens"])
-        elif "instruction" in observation and isinstance(observation["instruction"], str):
-            # Tokenize and process instruction string if not already tokenized
-            token_ids = self.tokenizer(observation["instruction"])
-            max_length = 128
-            if len(token_ids) > max_length:
-                token_ids = token_ids[:max_length]
-            else:
-                token_ids.extend([0] * (max_length - len(token_ids)))
-            instruction_tokens = torch.tensor(
-                token_ids, dtype=torch.long, device=self.device
-            ).unsqueeze(0)
-            text_emb = self.encode_text(instruction_tokens)
-        
-        # Fuse vision and text embeddings
-        if text_emb is not None:
-            # Ensure both embeddings have the same dimensions for addition
-            # Get the minimum dimension to avoid size mismatch
-            min_dim = min(vision_emb.shape[-1], text_emb.shape[-1])
-            # Expand or truncate to match dimensions if needed
-            vision_truncated = vision_emb[..., :min_dim]
-            text_truncated = text_emb[..., :min_dim]
-            
-            # Match batch dimensions if needed
-            if vision_truncated.shape[0] != text_truncated.shape[0]:
-                # If text has batch size 1 but vision has different batch size
-                if text_truncated.shape[0] == 1:
-                    text_truncated = text_truncated.expand(vision_truncated.shape[0], -1)
-            
-            hidden_states = vision_truncated + text_truncated
-        else:
-            hidden_states = vision_emb
-
-        # Compute outputs from different heads
-        subtask_logits = self.subtask_head(hidden_states)
-        fast_logits = self.fast_head(hidden_states)
-
-        # For flow head, we need target actions for training
-        if "action" in observation:
-            target_actions = observation["action"]
-            flow_vectors = self.flow_head(hidden_states, target_action=target_actions)
-            # Use flow matching loss
-            flow_loss = flow_matching_loss(flow_vectors, target_actions)
-        else:
-            # If no target action provided, compute a dummy flow
-            flow_vectors = self.flow_head(hidden_states)
-            flow_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
-
-        # TODO: Implement proper loss computation based on training stage and targets
-        # For now return a combined dummy loss
-        dummy_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
-        combined_loss = dummy_loss + flow_loss
-        return combined_loss
-
-    def sample_subtask(self, hidden_states):
-        """
-        Sample a subtask using the subtask head.
-
-        Note: This is a placeholder implementation. Full subtask sampling
-        logic will be implemented in the complete Pi0.5 architecture.
-        """
-        subtask_logits = self.subtask_head(hidden_states)
-        # For now, just return raw logits
-        return subtask_logits
-
-    def predict_with_fast(self, hidden_states, task_instruction: Optional[str] = None):
-        """
-        Predict actions using the FAST head.
-
-        Note: This is a placeholder implementation. Full FAST-based
-        action prediction will be implemented in the complete Pi0.5 architecture.
-        """
-        fast_logits = self.fast_head(hidden_states)
-        # For now, just return raw logits
-        return fast_logits
-
-    def predict_with_flow(self, hidden_states):
-        """
-        Predict actions using the flow head.
-
-        Uses the flow head's prediction method to generate actions.
-        """
-        flow_actions = self.flow_head.predict(hidden_states)
-        return flow_actions
-
-    def predict(self, obs: dict[str, Any], **kwargs) -> torch.Tensor:
-        """
-        Predict action for a single observation.
-        Real rollout implementation for inference-time control.
+        Returns:
+            Predicted action
         """
         obs = self.prepare_input(observation=obs)
+        return self._policy.select_action(obs)
 
-        # Extract image for backbone
-        if "image" in obs:
-            img_input = obs["image"]
-        elif "observation.images.image" in obs:
-            img_input = obs["observation.images.image"]
-        else:
-            # Default tensor with proper shape
-            img_input = torch.rand(1, *self.image_dim, device=self.device)
-
-        # Ensure correct device placement
-        img_input = img_input.to(self.device)
-
-        # Get vision embeddings from backbone
-        vision_emb = self.backbone(img_input)
-
-        # Process text if present
-        text_emb = None
-        if "instruction_tokens" in obs and obs["instruction_tokens"] is not None:
-            instruction_tokens = obs["instruction_tokens"]
-            # Ensure tokens are on correct device
-            instruction_tokens = instruction_tokens.to(self.device)
-            text_emb = self.encode_text(instruction_tokens)
-        elif "instruction" in obs and isinstance(obs["instruction"], torch.Tensor):
-            # Handle case where instruction is already tokenized as tensor
-            instruction_tokens = obs["instruction"].to(self.device)
-            text_emb = self.encode_text(instruction_tokens)
-        elif "instruction" in obs and isinstance(obs["instruction"], str):
-            # Tokenize string instruction
-            token_ids = self.tokenizer(obs["instruction"])
-            max_length = 128
-            if len(token_ids) > max_length:
-                token_ids = token_ids[:max_length]
-            else:
-                token_ids.extend([0] * (max_length - len(token_ids)))
-            instruction_tokens = torch.tensor(
-                token_ids, dtype=torch.long, device=self.device
-            ).unsqueeze(0)
-            text_emb = self.encode_text(instruction_tokens)
-        elif "language" in obs and isinstance(obs["language"], str):
-            # Handle case where language key is used instead of instruction
-            token_ids = self.tokenizer(obs["language"])
-            max_length = 128
-            if len(token_ids) > max_length:
-                token_ids = token_ids[:max_length]
-            else:
-                token_ids.extend([0] * (max_length - len(token_ids)))
-            instruction_tokens = torch.tensor(
-                token_ids, dtype=torch.long, device=self.device
-            ).unsqueeze(0)
-            text_emb = self.encode_text(instruction_tokens)
-
-        # Fuse vision and text embeddings
-        if text_emb is not None:
-            # Ensure both embeddings have the same dimensions for addition
-            min_dim = min(vision_emb.shape[-1], text_emb.shape[-1])
-            # Truncate to matching dimensions
-            vision_truncated = vision_emb[..., :min_dim]
-            text_truncated = text_emb[..., :min_dim]
-
-            # Match batch dimensions if needed
-            if vision_truncated.shape[0] != text_truncated.shape[0]:
-                # If text has batch size 1 but vision has different batch size
-                if text_truncated.shape[0] == 1:
-                    text_truncated = text_truncated.expand(vision_truncated.shape[0], -1)
-
-            hidden_states = vision_truncated + text_truncated
-        else:
-            hidden_states = vision_emb
-
-        # Determine which prediction head to use based on training stage or config
-        use_flow = kwargs.get('use_flow', True)  # Default to flow for action prediction
-
-        if use_flow:
-            return self.predict_with_flow(hidden_states)
-        else:
-            return self.predict_with_fast(hidden_states)
-
-    def predict_n_actions(self, obs: dict[str, Any], n_actions: int = 10) -> torch.Tensor:
+    def predict_n_actions(self, obs: dict[str, Any], n_actions: int = 10) -> tensor:
         """
         Generate and return a sequence of `n_actions` actions.
 
-        Note: For sequential action prediction, the state should be updated after each action.
-        This is a simplified implementation that reuses the same observation.
-        """
-        actions = []
-        for i in range(n_actions):
-            # For simplicity, we'll reuse the same observation
-            # In practice, the state would be updated after each action
-            action = self.predict(obs)
-            actions.append(action)
+        Uses the policy's internal action queue. If the queue is empty, the
+        underlying policy will generate a chunk of size `config.n_action_steps`
+        (default 50) and subsequent calls pop from that chunk.
 
-        # Stack to (n, action_dim)
+        Args:
+            obs: Observation dictionary.
+            n_actions: Number of actions to return from the model.
+
+        Returns:
+            Tensor of shape (n_actions, action_dim) on the model device.
+        """
+        obs_prep = self.prepare_input(observation=obs)
+        actions = []
+        for _ in range(n_actions):
+            actions.append(self._policy.select_action(obs_prep))
+        # Stack to (n, action_dim). select_action returns (batch=1, action_dim) or (action_dim)
+
+        actions = [
+            a.squeeze(0) if a.dim() == 2 and a.size(0) == 1 else a for a in actions
+        ]
         return torch.stack(actions, dim=0)
 
-    def get_trainable_params(self) -> list[nn.Parameter]:
-        """Return the parameters that should be optimized during training."""
-        return list(self.parameters())
+    def get_trainable_params(self) -> list[nn.parameter]:
+        """
+        Return the parameters that should be optimized during training.
+
+        Returns:
+            List of parameters to optimize.
+        """
+        print_trainable_summary(self._policy)
+        params = [p for p in self._policy.parameters()]
+        return params
+
+    def forward(self, observation) -> tensor:
+        """
+        Compute the training loss for a batch.
+        Prepares the observation into the policy's expected format and delegates
+        to the wrapped policy's `forward`.
+        Assumes the policy returns a
+        `(loss, loss_dict)` tuple and this method returns the loss only.
+
+        Args:
+            observation: Batch observation (see `prepare_input`).
+
+        Returns:
+            Scalar loss tensor for the batch.
+        """
+        batch = self.prepare_input(observation=observation)
+        loss, _ = self._policy.forward(batch)
+
+        return loss
 
     def save_policy(self, out_dir: str) -> None:
-        """Save the model state to directory."""
-        # TODO: Implement proper saving logic with config
-        model_path = f"{out_dir}/pi05_model.pth"
-        torch.save(self.state_dict(), model_path)
+        """
+        Save the full fine-tuned model via the underlying policy's  `save_pretrained`.
+
+        Args:
+            out_dir: Output directory to write model artifacts.
+
+        """
+        os.makedirs(out_dir, exist_ok=True)
+
+        self._policy.save_pretrained(out_dir)
+        print(f"[Model] Saved full model state_dict to {out_dir}")
 
     def load_dataset_stats(self, dataset_stats_path: str) -> None:
-        """Load dataset statistics if needed."""
-        # TODO: Implement dataset stats loading if required
-        pass
+        """
+        Load dataset stats from JSON and (re)initialize normalization modules.
 
-    def load_backbone(self, backbone_path: str):
+        Args:
+            dataset_stats_path: Path to a JSON file containing LeRobot-compatible stats
+                for keys like 'observation.state', 'observation.images.image', 'action'.
         """
-        Load pretrained backbone weights.
-        """
-        # TODO: Implement backbone loading logic
-        print(f"Loading backbone from {backbone_path}")
-        # Example loading logic (would depend on actual backbone format)
-        # backbone_state = torch.load(backbone_path, map_location=self.device)
-        # self.backbone.load_state_dict(backbone_state)
+
+        stats_path = Path(dataset_stats_path)
+        if not stats_path.exists():
+            raise FileNotFoundError(f"Dataset stats file not found: {stats_path}")
+
+        with open(stats_path, "r") as f:
+            raw = json.load(f)
+        loaded_stats = {
+            k: {kk: np.array(vv) for kk, vv in d.items()} for k, d in raw.items()
+        }
+
+        norm_map = getattr(self._policy.config, "normalization_mapping", None)
+        if norm_map is None:
+            return
+
+        # Refresh buffers with current feature schemas
+        self._policy.normalize_inputs = Normalize(
+            self._policy.config.input_features, norm_map, loaded_stats
+        )
+        if hasattr(self._policy, "normalize_targets"):
+            self._policy.normalize_targets = Normalize(
+                self._policy.config.output_features, norm_map, loaded_stats
+            )
+        self._policy.unnormalize_outputs = Unnormalize(
+            self._policy.config.output_features, norm_map, loaded_stats
+        )
+
+    def _load_input_output_features(self) -> None:
+        input_features = {
+            "observation.state": PolicyFeature(
+                type=FeatureType.STATE, shape=(self.obs_dim,)
+            )
+        }
+        for cam_name in ArkMLContext.visual_input_features:
+            input_features[f"observation.images.{cam_name}"] = PolicyFeature(
+                type=FeatureType.VISUAL, shape=self.image_dim
+            )
+        self._policy.config.input_features = input_features
+
+        self._policy.config.output_features = {
+            "action": PolicyFeature(type=FeatureType.ACTION, shape=(self.action_dim,))
+        }

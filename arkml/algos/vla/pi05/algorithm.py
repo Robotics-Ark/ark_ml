@@ -1,77 +1,177 @@
+import json
+import os
+import sys
+from pathlib import Path
 from typing import Any
+
 import torch
-from torch.utils.data import DataLoader
 from arkml.core.algorithm import BaseAlgorithm
 from arkml.core.policy import BasePolicy
 from arkml.core.registry import ALGOS
+from arkml.utils.schema_io import get_visual_features
+from arkml.utils.utils import _normalise_shape
 from omegaconf import DictConfig
+from torch.utils.data import DataLoader, random_split
+from torchvision import transforms
+
+from .compute_stats import compute_pi05_stats
+from .dataset import Pi05Dataset
+from .evaluator import Pi05Evaluator
+from .trainer import Pi05Trainer
+
 
 @ALGOS.register("pi05")
 class Pi05Algorithm(BaseAlgorithm):
-    """
-    Algorithm wrapper for Pi0.5 training and evaluation.
+    """Algorithm wrapper for Pi05 training and evaluation.
+
+
+    Args:
+        policy : The policy to be trained.
+        device : Device identifier used to move the policy and run training.
+        cfg : Configuration object containing all configuration parameters.
+
     """
 
     def __init__(self, policy: BasePolicy, device: str, cfg: DictConfig) -> None:
-        self.policy = policy
+        super().__init__()
+        self.model = policy
         self.device = device
         self.cfg = cfg
-        # Set up optimizer based on config
-        self.optimizer = torch.optim.Adam(
-            policy.get_trainable_params(),
-            lr=cfg.get("learning_rate", 1e-4),
-            weight_decay=cfg.get("weight_decay", 0.01)
+
+        # Load dataset with task information
+        transform = transforms.Compose(
+            [
+                transforms.Resize((224, 224)),  # Resize
+                transforms.ColorJitter(0.2, 0.2, 0.2),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                ),
+            ]
         )
 
+        img_dim = _normalise_shape(cfg.algo.model.image_dim)
+
+        dataset = Pi05Dataset(
+            dataset_path=cfg.data.dataset_path,
+            transform=transform,
+            pred_horizon=cfg.algo.model.pred_horizon,
+        )
+        self.calculate_dataset_stats(
+            dataset_path=cfg.data.dataset_path,
+            obs_dim=cfg.algo.model.obs_dim,
+            action_dim=cfg.algo.model.action_dim,
+            image_dim=img_dim,
+        )
+
+        # Train/val split (80/20)
+        total_len = len(dataset)
+        train_len = int(0.8 * total_len)
+        val_len = total_len - train_len
+        train_dataset, val_dataset = random_split(
+            dataset,
+            [train_len, val_len],
+            generator=torch.Generator().manual_seed(42),
+        )
+        num_workers = cfg.algo.trainer.num_workers
+        self.train_loader = DataLoader(
+            train_dataset,
+            batch_size=cfg.algo.trainer.batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=True,
+            persistent_workers=(num_workers > 0 and sys.platform != "win32"),
+        )
+        self.val_loader = DataLoader(
+            val_dataset,
+            batch_size=cfg.algo.trainer.batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=True,
+            persistent_workers=(num_workers > 0 and sys.platform != "win32"),
+        )
+
+        print(f"Data split : train: {train_len}, val: {val_len}")
+
     def train(self, *args, **kwargs) -> Any:
-        """Train the model for one epoch using the dataloader."""
-        dataloader = args[0] if args else kwargs.get('dataloader')
-        if dataloader is None:
-            raise ValueError("dataloader is required for training")
+        """Run training via the underlying trainer.
 
-        self.policy.set_train_mode()
-        total_loss = 0.0
-        num_batches = 0
-
-        for batch in dataloader:
-            # Move batch to device
-            batch = {k: v.to(self.device) if torch.is_tensor(v) else v for k, v in batch.items()}
-
-            # Forward pass
-            loss = self.policy.forward(batch)
-
-            # Backward pass
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
-
-            total_loss += loss.item()
-            num_batches += 1
-
-        avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
-        return {"avg_loss": avg_loss, "num_batches": num_batches}
+        Returns:
+            The result of ``Pi05Trainer.fit()``, typically training
+            metrics or artifacts as defined by the trainer implementation.
+        """
+        trainer = Pi05Trainer(
+            model=self.model,
+            dataloader=self.train_loader,
+            device=self.device,
+            lr=self.cfg.algo.trainer.lr,
+            weight_decay=getattr(self.cfg.algo.trainer, "weight_decay", 0.0),
+            num_epochs=getattr(self.cfg.algo.trainer, "max_epochs", 3),
+            grad_accum=getattr(self.cfg.algo.trainer, "grad_accum", 8),
+            output_dir=str(os.path.join(self.cfg.output_dir, self.alg_name)),
+            use_bf16=getattr(self.cfg.algo.trainer, "use_bf16", False),
+            val_dataloader=self.val_loader,
+            eval_every=1,
+        )
+        return trainer.fit()
 
     def eval(self, *args, **kwargs) -> dict:
-        """Evaluate the model using the dataloader."""
-        dataloader = args[0] if args else kwargs.get('dataloader')
-        if dataloader is None:
-            raise ValueError("dataloader is required for evaluation")
+        """Run validation via the underlying evaluator.
 
-        self.policy.set_eval_mode()
-        total_loss = 0.0
-        num_batches = 0
+        Returns:
+            dict: Metrics reported by :class:`Pi05Evaluator.evaluate()`.
+        """
+        evaluator = Pi05Evaluator(
+            model=self.model,
+            dataloader=self.val_loader,
+            device=self.device,
+        )
+        return evaluator.evaluate()
 
-        with torch.no_grad():
-            for batch in dataloader:
-                # Move batch to device
-                batch = {k: v.to(self.device) if torch.is_tensor(v) else v for k, v in batch.items()}
+    def calculate_dataset_stats(
+        self,
+        dataset_path,
+        *,
+        obs_dim: int,
+        action_dim: int,
+        image_dim: tuple[int, int, int],
+    ) -> None:
+        """
+        Compute and save dataset statistics for the Pi05 algorithm.
+        Args:
+            dataset_path: Path to the dataset directory containing trajectory files.
+            obs_dim: Dimension of the observation state vector.
+            action_dim: Dimension of the action vector.
+            image_dim: Dimensions of image data in (channels, height, width) format.
 
-                # Forward pass
-                loss = self.policy.forward(batch)
+        Returns:
+            None
+        """
 
-                total_loss += loss.item()
-                num_batches += 1
+        try:
+            stats_path = Path(dataset_path) / "pi05_stats.json"
+            print(f"[Pi05Algorithm] Computing dataset stats : {stats_path}")
+            if not stats_path.exists():
+                stats = compute_pi05_stats(
+                    dataset_path,
+                    obs_dim=obs_dim,
+                    action_dim=action_dim,
+                    image_channels=image_dim[0],
+                    sample_images_only=True,
+                )
+                stats_path.parent.mkdir(parents=True, exist_ok=True)
 
-        avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
-        return {"avg_eval_loss": avg_loss, "num_batches": num_batches}
+                with open(stats_path, "w") as f:
+                    json.dump(
+                        {
+                            k: {kk: vv.tolist() for kk, vv in d.items()}
+                            for k, d in stats.items()
+                        },
+                        f,
+                        indent=2,
+                    )
 
+            self.model.load_dataset_stats(str(stats_path))
+        except Exception as e:
+            print(f"[Pi05Algorithm] Warning: failed to ensure dataset stats ({e})")
+            raise RuntimeError(f"[Pi05Algorithm] Warning: {e}")

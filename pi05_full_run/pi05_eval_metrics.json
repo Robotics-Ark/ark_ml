@@ -1,0 +1,5 @@
+{
+    "error": "ModuleNotFoundError: No module named 'lerobot.policies.normalize'",
+    "status": "failed",
+    "details": "Required dependencies (lerobot library) are not available in the current environment."
+}
