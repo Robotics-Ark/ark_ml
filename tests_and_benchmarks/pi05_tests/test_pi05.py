@@ -3,7 +3,7 @@ import torch
 import numpy as np
 from torch.utils.data import DataLoader, TensorDataset
 from arkml.algos.vla.tokenizers.fast import FASTTokenizer
-from arkml.algos.vla.pi05.models import Pi05Policy, flow_matching_loss, DummyBackbone, ActionFlowExpert
+from arkml.algos.vla.pi05.models import Pi05Policy, flow_matching_loss
 from arkml.algos.vla.pi05.trainer import Pi05Trainer
 from arkml.algos.vla.pi05.evaluator import Pi05Evaluator
 
@@ -269,21 +269,30 @@ class TestPi05Evaluator:
             image_dim=(3, 224, 224),
             pred_horizon=1
         )
-        
-        evaluator = Pi05Evaluator(model, None, "cpu")
-        
-        # Test action evaluation
-        hidden_states = torch.rand(3, 512)  # 3 samples, 512-dim hidden state
+
+        # Create a simple dataloader for evaluator (it needs one)
+        images = torch.rand(5, 3, 224, 224)
+        actions = torch.rand(5, 8)
+        dataset = TensorDataset(images, actions)
+        dataloader = DataLoader(dataset, batch_size=2)
+
+        evaluator = Pi05Evaluator(model, dataloader, "cpu")
+
+        # Test action evaluation: test with actual batch data
+        batch = {
+            "image": torch.rand(3, 3, 224, 224),
+            "action": torch.rand(3, 8),
+        }
         ground_truth_actions = torch.rand(3, 8)  # 3 samples, 8-dim actions
-        
-        metrics = evaluator.eval_actions(hidden_states, ground_truth_actions)
-        
+
+        metrics = evaluator.eval_actions(batch, ground_truth_actions)
+
         assert "action_mse" in metrics
         assert "action_mae" in metrics
         assert "action_accuracy_within_threshold" in metrics
         assert "threshold" in metrics
         assert "total_evaluated" in metrics
-        
+
         assert isinstance(metrics["action_mse"], float)
         assert isinstance(metrics["action_mae"], float)
         assert 0.0 <= metrics["action_accuracy_within_threshold"] <= 1.0

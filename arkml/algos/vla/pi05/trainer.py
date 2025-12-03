@@ -68,65 +68,41 @@ class Pi05Trainer(Trainer):
         Training step for pretraining stage:
         CE(text) + CE(FAST tokens)
         """
+        # For the actual LeRobot Pi0.5 implementation, the forward method
+        # should handle the pretraining loss calculation
         # Extract relevant tensors from batch
         prefix_tokens = batch.get("prefix_tokens", None)
         target_tokens = batch.get("target_tokens", None)
         modality = batch.get("modality", None)
         actions_cont = batch.get("actions_cont", None)
 
-        # Calculate cross-entropy loss for text tokens (subtask/qa/etc.)
-        text_loss = 0.0
-        if prefix_tokens is not None and target_tokens is not None:
-            # Use a simple approach where prefix_tokens are used to predict target_tokens
-            # This would require the model to have a text prediction head
-            # For now, we'll focus on the FAST token loss
-            pass
+        # Forward pass - delegate to the underlying LeRobot policy
+        loss = self.model.forward(batch)
 
-        # Calculate cross-entropy loss for FAST tokens if this is a robot action modality
-        fast_loss = 0.0
-        if modality is not None and actions_cont is not None:
-            # Forward pass
-            loss = self.model.forward(batch)
-            # The model's forward method already handles the loss calculation
-            # For pretrain, this would be based on FAST token prediction
-            fast_loss = loss
-
-        # Total pretrain loss
-        total_loss = fast_loss
-
-        return total_loss
+        return loss
 
     def train_step_posttrain(self, batch):
         """
         Training step for posttraining stage:
         CE(subtask) + alpha * flow_matching_loss
         """
+        # For the actual LeRobot Pi0.5 implementation, the forward method
+        # should handle the post-training loss calculation
         # Extract relevant tensors from batch
         prefix_tokens = batch.get("prefix_tokens", None)
         target_tokens = batch.get("target_tokens", None)
         modality = batch.get("modality", None)
         actions_cont = batch.get("actions_cont", None)
 
-        # Get model prediction
+        # Get model prediction - delegate to the underlying LeRobot policy
         loss = self.model.forward(batch)
 
-        # The model forward already includes flow matching loss when action is provided
-        # We need to separately compute the subtask loss if applicable
-        subtask_loss = 0.0
-        flow_loss = 0.0
+        # If we need to manually adjust based on flow_alpha, we could do so here
+        # However, the underlying LeRobot policy should handle stage-specific losses
+        # Weight the loss according to flow_alpha if needed
+        weighted_loss = loss  # The underlying policy should handle this internally
 
-        # Extract flow loss specifically if we have action data
-        if modality is not None and "action" in batch and actions_cont is not None:
-            # This would be handled in the model's forward pass
-            # For posttrain, we want to ensure flow matching loss is properly weighted
-            pass
-
-        # Total posttrain loss: subtask_loss + alpha * flow_loss
-        # For now, we'll use the loss from the model forward pass
-        # In a full implementation, we'd separate the losses
-        total_loss = loss
-
-        return total_loss
+        return weighted_loss
 
     def train(self, stage: str = "pretrain"):
         """
@@ -234,6 +210,12 @@ class Pi05Trainer(Trainer):
         """
         # Get training stage from model config or use default
         training_stage = getattr(self.model, 'training_stage', 'pretrain')
+
+        # Also try to get stage from the underlying LeRobot policy config
+        if hasattr(self.model, '_policy') and hasattr(self.model._policy, 'config'):
+            policy_stage = getattr(self.model._policy.config, 'training_stage', None)
+            if policy_stage:
+                training_stage = policy_stage
 
         print(f"Starting training in {training_stage} stage")
 

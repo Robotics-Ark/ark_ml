@@ -7,3 +7,4 @@ torchvision
 tqdm
 transformers
 pytest
+stable-baselines3[extra]
