@@ -95,3 +95,87 @@ arkml.tools.train algo=<ml_algorithm> \
  output_dir=/output/path
 
 ```
+
+## Pi0.5
+
+Pi0.5 is an upgraded version of the Pi0 Vision-Language-Action model with enhanced capabilities for robotic manipulation tasks. It features a multi-stage training approach with flow matching for precise action prediction.
+
+### Training Stages
+
+#### Pretraining Stage
+The pretraining stage focuses on learning foundational representations using multiple modalities and FAST tokenization:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 HYDRA_FULL_ERROR=1 \
+arkml-train algo=pi05 \
+ data.dataset_path=/path/to/pi05/dataset \
+ output_dir=/output/path \
+ algo.model.policy_type=pi0.5 \
+ algo.training.stage=pretrain \
+ algo.training.pretrain_steps=280000
+```
+
+The pretraining stage optimizes:
+- Cross-entropy loss for text tokens (CE(text))
+- Cross-entropy loss for FAST tokens (CE(FAST tokens))
+
+#### Post-training Stage
+The post-training stage refines the model with flow matching and subtask prediction:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 HYDRA_FULL_ERROR=1 \
+arkml-train algo=pi05 \
+ data.dataset_path=/path/to/pi05/dataset \
+ output_dir=/output/path \
+ algo.model.policy_type=pi0.5 \
+ algo.training.stage=posttrain \
+ algo.training.posttrain_steps=80000 \
+ algo.training.flow_alpha=10.0
+```
+
+The post-training stage optimizes:
+- Cross-entropy loss for subtasks (CE(subtask))
+- Flow matching loss weighted by alpha (alpha * flow_matching_loss)
+
+### Running Inference
+
+To run inference with a trained Pi0.5 model:
+
+```bash
+HYDRA_FULL_ERROR=1 arkml-policy algo=pi05 \
+  algo.model.model_path=path/to/pi05/model \
+  policy_node_name=pi05_node
+```
+
+You can then call the inference endpoints:
+- `pi05_node/policy/predict` - Get next action prediction
+- `pi05_node/policy/reset` - Reset policy state
+- `pi05_node/policy/start` - Start policy service
+- `pi05_node/policy/stop` - Stop policy service
+
+### Configuration Explanation
+
+The Pi0.5 configuration includes several key parameters:
+
+**Model Configuration:**
+- `model.backbone_type`: Vision-language backbone architecture (e.g., 'siglip_gemma')
+- `model.use_fast_tokens`: Whether to use FAST tokenizer for action discretization
+- `model.use_flow_matching`: Whether to use flow matching for action prediction
+
+**Training Configuration:**
+- `training.stage`: Current training stage ('pretrain' or 'posttrain')
+- `training.pretrain_steps`: Number of steps for pretraining (280000 default)
+- `training.posttrain_steps`: Number of steps for post-training (80000 default)
+- `training.integration_steps`: Number of steps for Euler integration in flow matching
+- `training.flow_alpha`: Weight for flow matching loss (10.0 default)
+
+**Dataset Configuration:**
+The dataset configuration uses mixture sampling with:
+- Primary dataset for main training data
+- Secondary datasets for auxiliary data
+- Configurable weights for balancing different data sources
+
+The model uses a multi-head architecture with:
+- Subtask head for high-level task planning
+- FAST head for discretized action prediction
+- Flow head for continuous action prediction using flow matching

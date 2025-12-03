@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from ark.utils.utils import ConfigPath
 from arkml.core.algorithm import BaseAlgorithm
 from arkml.core.policy import BasePolicy
 from arkml.core.registry import ALGOS

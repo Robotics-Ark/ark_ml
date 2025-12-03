@@ -1,0 +1,37 @@
+name: pi05_dataset
+
+dataset:
+  # Mixture fields for dataset
+  mixture:
+    primary_dataset: "pi05_main"
+    secondary_datasets: 
+      - "pi05_auxiliary"
+      - "pi05_validation"
+    weights:
+      primary: 0.7
+      secondary: 0.3
+
+  # Dataset paths and settings
+  dataset_path: "/path/to/pi05/dataset"
+  obs_dim: 9
+  action_dim: 8
+  image_shape: [3, 480, 640]
+  
+  # Data loading settings
+  num_workers: 4
+  batch_size: 8
+  shuffle: true
+  
+  # Preprocessing settings
+  transforms:
+    resize: [224, 224]
+    normalize:
+      mean: [0.485, 0.456, 0.406]
+      std: [0.229, 0.224, 0.225]
+    color_jitter: [0.2, 0.2, 0.2]
+  
+  # Data-specific configurations
+  temporal:
+    obs_horizon: 1
+    pred_horizon: 1
+    action_horizon: 1
