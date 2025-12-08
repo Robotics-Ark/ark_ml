@@ -54,9 +54,6 @@ class PolicyNode(ABC, BaseNode):
 
         cfg_dict = ArkMLContext.global_config
 
-        if "channel_config" not in cfg_dict:
-            raise ValueError("channel_config must not be empty and properly configured")
-
         self.mode = cfg_dict["policy_mode"]
         if self.mode not in ["service", "stepper"]:
             raise ValueError("Policy_mode must be 'service' or 'stepper'")
