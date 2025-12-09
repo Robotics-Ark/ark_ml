@@ -141,6 +141,7 @@ class ActPolicyNode(PolicyNode):
         """Clear any prefetched actions when an episode ends."""
         self.ensembler.sum_buf[:] = 0.0
         self.ensembler.cnt_buf[:] = 0.0
+        self.policy.reset()
 
     def prepare_observation(self, ob: dict[str, Any]):
         """Convert a single raw env observation into a batched policy input.

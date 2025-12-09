@@ -25,17 +25,28 @@ class Registry:
 
     def get(self, name):
         """
-        Retrieve a previously registered class by name or raise an error.
+        Retrieve a registered class by name or raise an error.
         Args:
             name: Name of class to retrieve.
 
         Returns:
             Class object or raise an error.
         """
-        if name not in self._registry:
-            raise ValueError(
-                f"{name} not found in registry. Available: {list(self._registry.keys())}"
-            )
+        if name == "DiffusionPolicyModel":
+            import arkml.algos.diffusion_policy.algorithm
+            import arkml.algos.diffusion_policy.models
+        elif name == "PiZeroNet":
+            import arkml.algos.vla.pizero.algorithm
+            import arkml.algos.vla.pizero.models
+        elif name == "act":
+            import arkml.algos.act.algorithm
+            import arkml.algos.act.models
+        elif name == "sb3rl":
+            import arkml.algos.rl.sb3_algorithm
+            import arkml.algos.rl.sb3_models
+        else:
+            raise ValueError(f"Unknown model {name}")
+
         return self._registry[name]
 
 

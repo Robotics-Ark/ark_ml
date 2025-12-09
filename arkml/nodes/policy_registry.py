@@ -94,14 +94,8 @@ def _build_diffusion() -> BasePolicy:
 
 
 @register_policy("sb3rl")
-def _build_diffusion() -> BasePolicy:
-    """Build and return a SB3RL from config.
+def _build_sb3() -> BasePolicy:
+    """Build and return an SB3 RL policy node."""
+    from arkml.nodes.sb3_policy_node import SB3RLPolicyNode
 
-
-    Returns:
-      DiffusionPolicyNode.
-    """
-    ...
-    # from arkml.nodes.diffusion_node import DiffusionPolicyNode
-    #
-    # return DiffusionPolicyNode
+    return SB3RLPolicyNode

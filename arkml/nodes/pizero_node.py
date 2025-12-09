@@ -56,7 +56,7 @@ class PiZeroPolicyNode(PolicyNode):
         Returns:
             None
         """
-        pass
+        self.policy.reset()
 
     def _callback_text_input(
         self, time_stamp: int, channel_name: str, msg: string_t
@@ -138,10 +138,11 @@ class PiZeroPolicyNode(PolicyNode):
         Returns:
           numpy.ndarray: Action vector for the first batch element.
         """
+
         obs = self.prepare_observation(obs_seq)
 
         with torch.no_grad():
-            actions = self.policy.predict_n_actions(obs, n_actions=self.n_infer_actions)
+            actions = self.policy.predict(obs, n_actions=self.n_infer_actions)
             actions = actions.detach().cpu().numpy()
 
         return actions[0]
