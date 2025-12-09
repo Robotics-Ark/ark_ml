@@ -15,12 +15,15 @@ from torch import nn
 
 
 class PolicyEnv(ArkEnv):
-    def __init__(self, config_path: str, channel_schema: str):
+    def __init__(
+        self, global_config: str, channel_schema: str, sim: bool, namespace: str = "ark"
+    ):
         super().__init__(
             environment_name="policy_env",
             channel_schema=channel_schema,
-            global_config=config_path,
-            sim=True,
+            global_config=global_config,
+            sim=sim,
+            namespace=namespace,
         )
 
     @staticmethod
@@ -54,9 +57,6 @@ class PolicyNode(ABC, BaseNode):
 
         cfg_dict = ArkMLContext.global_config
 
-        if "channel_config" not in cfg_dict:
-            raise ValueError("channel_config must not be empty and properly configured")
-
         self.mode = cfg_dict["policy_mode"]
         if self.mode not in ["service", "stepper"]:
             raise ValueError("Policy_mode must be 'service' or 'stepper'")
@@ -64,15 +64,14 @@ class PolicyNode(ABC, BaseNode):
         log.info(f"Policy mode: {self.mode}")
         self._env = PolicyEnv(
             channel_schema=ArkMLContext.cfg["channel_schema"],
-            config_path=ArkMLContext.cfg["global_config"],
+            global_config=ArkMLContext.cfg["global_config"],
+            sim=True,
         )
         self.obs = None
         self.debug = os.getenv("ARK_DEBUG", "").lower() in ("1", "true")
 
         # Policy setup
         self.policy = policy
-        self.policy.to_device(device=device)
-        self.policy.set_eval_mode()
         self.latest_action = None
         self._stop_service = True
         self._resetting = False
@@ -120,17 +119,30 @@ class PolicyNode(ABC, BaseNode):
         if self._record_video:
             self._start_video_recorder()
 
+        try:
+            self.policy.to_device(device=device)
+            self.policy.set_eval_mode()
+        except AttributeError as e:
+            log.error(e)
+
     def reset(self) -> None:
         """Reset the internal state of the policy."""
         self._stop_service = True
         self._resetting = True
         self.latest_action = None
-        self.policy.reset()
         # Allow subclasses to clear their own buffers
         reset_hook = getattr(self, "_on_reset", None)
         if callable(reset_hook):
             reset_hook()
-        self.obs, _ = self._env.reset()
+        result = self._env.reset()
+        # Gymnasium API
+        if isinstance(result, tuple):
+            self.obs = result[0]  # result = (obs, info)
+
+        # Old Gym API
+        else:
+            self.obs = result
+
         # Start a fresh recording after reset
         if self._video_recorder:
             self._video_recorder.close()
@@ -228,7 +240,20 @@ class PolicyNode(ABC, BaseNode):
             self.step_count = 0
 
         action = self.predict(self.obs)
-        self.obs, _, _, _, _ = self._env.step(action)
+        result = self._env.step(action)
+
+        # Gymnasium-style: 5 elements
+        if len(result) == 5:
+            self.obs, reward, terminated, truncated, info = result
+            done = terminated or truncated
+
+        # Old Gym-style: 4 elements
+        elif len(result) == 4:
+            self.obs, reward, done, info = result
+
+        else:
+            raise ValueError(f"Unexpected number of return values: {len(result)}")
+
         self.step_count += 1
 
         if self.debug:

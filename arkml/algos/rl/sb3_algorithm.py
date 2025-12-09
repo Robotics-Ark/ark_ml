@@ -567,7 +567,7 @@ def build_vector_env(
     return VecMonitor(adapted)
 
 
-@ALGOS.register("sb3_rl")
+@ALGOS.register("sb3rl")
 class StableBaselinesRLAlgorithm(BaseAlgorithm):
     """Train Stable-Baselines3 algorithms on Ark vectorized environments."""
 

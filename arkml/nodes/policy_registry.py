@@ -71,12 +71,14 @@ def _build_pizero() -> BasePolicy:
 
     return PiZeroPolicyNode
 
+
 @register_policy("act")
 def _build_ACT():
     """Build and return ACT"""
     from arkml.nodes.act_policy_node import ActPolicyNode
 
     return ActPolicyNode
+
 
 @register_policy("diffusion_policy")
 def _build_diffusion() -> BasePolicy:
@@ -89,3 +91,11 @@ def _build_diffusion() -> BasePolicy:
     from arkml.nodes.diffusion_node import DiffusionPolicyNode
 
     return DiffusionPolicyNode
+
+
+@register_policy("sb3rl")
+def _build_sb3() -> BasePolicy:
+    """Build and return an SB3 RL policy node."""
+    from arkml.nodes.sb3_policy_node import SB3RLPolicyNode
+
+    return SB3RLPolicyNode
