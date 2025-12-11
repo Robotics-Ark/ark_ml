@@ -2,14 +2,16 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import numpy as np
+from arkml.core.algorithm import Evaluator
 
 
-class Pi05Evaluator:
+class Pi05Evaluator(Evaluator):
     """
     Evaluator class for Pi0.5 with subtask and action evaluation.
     """
 
     def __init__(self, model, dataloader: DataLoader, device):
+        super().__init__()
         self.model = model
         self.dataloader = dataloader
         self.device = device

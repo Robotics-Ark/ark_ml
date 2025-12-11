@@ -5,7 +5,6 @@ from typing import Any, Optional
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from arkml.core.policy import BasePolicy
 from arkml.core.registry import MODELS
 from arkml.utils.utils import print_trainable_summary
@@ -17,41 +16,7 @@ from lerobot.configs.types import FeatureType, PolicyFeature
 from torch import tensor
 
 from arkml.core.app_context import ArkMLContext
-
-
-def flow_matching_loss(pred, target):
-    """
-    Compute flow matching loss between predicted and target actions.
-
-    Args:
-        pred: Predicted flow vectors or actions
-        target: Target flow vectors or actions
-
-    Returns:
-        Scalar loss value (MSE loss)
-    """
-    return F.mse_loss(pred, target)
-
-
-class DummyBackbone(torch.nn.Module):
-    """
-    A minimal working dummy backbone for Pi0.5.
-    This is a placeholder that would be replaced with actual vision-language model.
-    """
-    def __init__(self, hidden_dim: int = 512):
-        super().__init__()
-        self.hidden_dim = hidden_dim
-        # Simple linear projection as a placeholder
-        self.projection = torch.nn.Linear(3 * 224 * 224, hidden_dim)  # Assuming flattened image input
-        self.norm = torch.nn.LayerNorm(hidden_dim)
-
-    def forward(self, x):
-        # Flatten and project input
-        batch_size = x.size(0)
-        x = x.view(batch_size, -1)  # Flatten image
-        x = self.projection(x)
-        x = self.norm(x)
-        return x
+from .utils import flow_matching_loss
 
 
 class ActionFlowExpert(torch.nn.Module):

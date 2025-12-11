@@ -67,7 +67,7 @@ class Pi05Algorithm(BaseAlgorithm):
             weight_decay=self.weight_decay,
             num_epochs=self.max_epochs,
             grad_accum=1.0,  # Gradient accumulation
-            output_dir='./output',  # TODO: Get from config
+            output_dir=self.cfg.output_dir,
             use_bf16=self.use_bf16,
             flow_alpha=self.flow_alpha,
             val_dataloader=val_dataloader,

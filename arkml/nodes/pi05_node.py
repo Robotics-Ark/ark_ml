@@ -1,9 +1,11 @@
 from typing import Dict, Any
 import torch
-from arkml.core.policy import BasePolicy
+import numpy as np
+from arkml.core.policy_node import PolicyNode
+from arktypes import string_t
 
 
-class Pi05Node(BasePolicy):
+class Pi05Node(PolicyNode):
     """
     Policy node for Pi0.5 integration.
     Structurally identical to PiZeroPolicyNode, using Pi05Policy internally.
@@ -17,7 +19,9 @@ class Pi05Node(BasePolicy):
             model: The Pi05Policy model instance
             device: Device to run the model on
         """
-        super().__init__()  # Initialize parent class first
+        policy_name = kwargs.get('policy_name', 'pi05_node')  # default policy name
+        super().__init__(policy=model, policy_name=policy_name, device=device)
+
         self.model = model
         self.device = device
 
@@ -27,6 +31,9 @@ class Pi05Node(BasePolicy):
         # Set to eval mode
         self.model.set_eval_mode()
 
+        # Register text input subscription
+        self.create_subscription(string_t, "text_input", self.on_text_input, 10)
+
         # Internal state for sequence prediction if needed
         self.reset()
 
@@ -34,17 +41,64 @@ class Pi05Node(BasePolicy):
         """Reset internal state for the policy node."""
         self.model.reset()
 
-    def predict(self, obs: Dict[str, Any]) -> torch.Tensor:
+    def predict(self, obs_seq: Dict[str, Any]) -> np.ndarray:
         """
-        Main prediction method that calls the underlying model's predict method.
+        Compute the action for the given observation batch.
+
+        The expected structure of ``obs_seq`` is dictated by the underlying VLA
+        policy (typically a dict with batched tensors for images and state, and
+        a list[str] for the task prompt).
 
         Args:
-            obs: Observation dictionary containing image, state, task, etc.
+          obs_seq: Observation input to the policy (dict or tensor as required
+            by the wrapped model).
 
         Returns:
-            Predicted action tensor
+          numpy.ndarray: Action vector for the first batch element.
         """
-        return self.model.predict(obs)
+        obs = self.prepare_observation(obs_seq)
+
+        with torch.no_grad():
+            action = self.model.predict(obs)
+            action = action.detach().cpu().numpy()
+
+        return action
+
+    def prepare_observation(self, ob: Dict[str, Any]):
+        """
+        Convert a single raw env observation into a batched policy input.
+        This method should be implemented based on the expected observation format.
+
+        Args:
+          ob: Single observation dict from the environment.
+
+        Returns:
+          A batch dictionary compatible with the model.
+        """
+        # This needs to match the expected input format of the Pi05 model
+        # Implementation depends on the specific observation format expected
+        obs = {}
+
+        # Handle state if available
+        if 'state' in ob:
+            state = torch.from_numpy(ob['state']).float().unsqueeze(0)  # (1, D)
+            obs['state'] = state
+
+        # Handle image if available
+        if 'image' in ob:
+            img = torch.from_numpy(ob['image']).float().unsqueeze(0)  # (1, C, H, W) or (1, H, W, C)
+            obs['image'] = img
+
+        # Handle task if available
+        if 'task' in ob:
+            obs['task'] = [ob['task']]  # List of strings expected
+
+        return obs
+
+    def on_text_input(self, msg):
+        """Callback to receive text input from the text node."""
+        if hasattr(self.model, "update_text_context"):
+            self.model.update_text_context(msg.data)
 
     def forward(self, batch: Dict[str, Any]) -> torch.Tensor:
         """
@@ -57,30 +111,3 @@ class Pi05Node(BasePolicy):
             Loss tensor for training
         """
         return self.model.forward(batch)
-
-    def predict_n_actions(self, obs: Dict[str, Any], n_actions: int = 10) -> torch.Tensor:
-        """
-        Generate multiple action predictions.
-
-        Args:
-            obs: Observation dictionary
-            n_actions: Number of actions to predict
-
-        Returns:
-            Tensor of multiple predicted actions
-        """
-        return self.model.predict_n_actions(obs, n_actions)
-
-    def to_device(self, device: str):
-        """
-        Move the model to specified device.
-
-        Args:
-            device: Target device string (e.g., "cpu", "cuda")
-
-        Returns:
-            Self for method chaining
-        """
-        self.device = device
-        self.model.to_device(device)
-        return self
