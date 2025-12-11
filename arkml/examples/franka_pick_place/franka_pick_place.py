@@ -1,6 +1,5 @@
 import argparse
 import time
-from pathlib import Path
 
 import numpy as np
 from ark.env.ark_env import ArkEnv
@@ -12,13 +11,6 @@ from arkml.core.rl.termination_conditions.base_termination_conditions import (
 )
 from arkml.core.rl.termination_conditions.timeout import Timeout
 from arktypes import flag_t, string_t
-from arktypes import (
-    task_space_command_t,
-    pose_t,
-    joint_state_t,
-    rigid_body_state_t,
-    rgbd_t,
-)
 from tqdm import tqdm
 
 
