@@ -14,9 +14,13 @@ def main(cfg: DictConfig):
 
     ArkMLContext.cfg = cfg
     ArkMLContext.global_config = ConfigPath(cfg.global_config).read_yaml()
-    io_schema = ConfigPath(
-        ArkMLContext.global_config["channel_config"]
-    ).read_yaml()
+    # io_schema = ConfigPath(
+    #     ArkMLContext.global_config["channel_config"]
+    # ).read_yaml()
+    # ArkMLContext.visual_input_features = get_visual_features(
+    #     schema=io_schema["observation_space"]
+    # )
+    io_schema = ConfigPath(cfg["channel_schema"]).read_yaml()
     ArkMLContext.visual_input_features = get_visual_features(
         schema=io_schema["observation_space"]
     )

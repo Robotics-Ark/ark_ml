@@ -44,8 +44,11 @@ class Registry:
         elif name == "sb3rl":
             import arkml.algos.rl.sb3_algorithm
             import arkml.algos.rl.sb3_models
-        else:
-            raise ValueError(f"Unknown model {name}")
+        elif name == "Pi05Policy":
+            import arkml.algos.vla.pi05.algorithm
+            import arkml.algos.vla.pi05.models
+        # else:
+        #     raise ValueError(f"Unknown model {name}")
 
         return self._registry[name]
 

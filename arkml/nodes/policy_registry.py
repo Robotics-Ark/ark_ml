@@ -70,6 +70,7 @@ def _build_pizero() -> BasePolicy:
     return PiZeroPolicyNode
 
 
+@register_policy("pi0.5")
 @register_policy("pi05")
 def _build_pi05() -> BasePolicy:
     """Build and return a Pi05 policy node from config."""
