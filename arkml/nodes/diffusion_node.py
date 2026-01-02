@@ -49,6 +49,7 @@ class DiffusionPolicyNode(PolicyNode):
         self._state_history.clear()
         self._image_history.clear()
         self._action_history.clear()
+        self.policy.reset()
 
     def _extract_state(self, obs: dict[str, Any]) -> torch.Tensor:
         """
