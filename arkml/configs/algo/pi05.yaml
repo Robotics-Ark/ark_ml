@@ -3,7 +3,7 @@ model:
   type: Pi05Policy
   name: Pi05Policy
   policy_type: pi0.5
-  model_path: lerobot/pi0.5
+  model_path: lerobot/pi05_base
   backbone_type: siglip_gemma
   use_fast_tokens: true
   use_flow_matching: true

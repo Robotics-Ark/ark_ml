@@ -47,6 +47,9 @@ class Registry:
         elif name == "pi05":
             import arkml.algos.vla.pi05.algorithm
             import arkml.algos.vla.pi05.models
+        elif name == "Pi05Policy":
+            import arkml.algos.vla.pi05.algorithm
+            import arkml.algos.vla.pi05.models
         else:
             raise ValueError(f"Unknown model {name}")
 

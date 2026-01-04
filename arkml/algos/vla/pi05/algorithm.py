@@ -21,19 +21,19 @@ class Pi05Algorithm(BaseAlgorithm):
         self.cfg = cfg
 
         # Extract training configuration
-        self.lr = cfg.trainer.get('lr', 2e-4)
-        self.batch_size = cfg.trainer.get('batch_size', 8)
-        self.max_epochs = cfg.trainer.get('max_epochs', 10)
-        self.weight_decay = cfg.trainer.get('weight_decay', 0.0)
-        self.num_workers = cfg.trainer.get('num_workers', 4)
-        self.use_bf16 = cfg.trainer.get('use_bf16', True)
+        self.lr = cfg.algo.trainer.get('lr', 2e-4)
+        self.batch_size = cfg.algo.trainer.get('batch_size', 8)
+        self.max_epochs = cfg.algo.trainer.get('max_epochs', 10)
+        self.weight_decay = cfg.algo.trainer.get('weight_decay', 0.0)
+        self.num_workers = cfg.algo.trainer.get('num_workers', 4)
+        self.use_bf16 = cfg.algo.trainer.get('use_bf16', True)
 
         # Training-specific config
-        self.training_stage = cfg.training.get('stage', 'pretrain')
-        self.flow_alpha = cfg.training.get('flow_alpha', 10.0)
-        self.pretrain_steps = cfg.training.get('pretrain_steps', 280000)
-        self.posttrain_steps = cfg.training.get('posttrain_steps', 80000)
-        self.integration_steps = cfg.training.get('integration_steps', 10)
+        self.training_stage = cfg.algo.training.get('stage', 'pretrain')
+        self.flow_alpha = cfg.algo.training.get('flow_alpha', 10.0)
+        self.pretrain_steps = cfg.algo.training.get('pretrain_steps', 280000)
+        self.posttrain_steps = cfg.algo.training.get('posttrain_steps', 80000)
+        self.integration_steps = cfg.algo.training.get('integration_steps', 10)
 
     def train(self) -> Any:
         """
