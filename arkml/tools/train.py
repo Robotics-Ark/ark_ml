@@ -1,6 +1,6 @@
 import hydra
 import torch
-from ark.utils.utils import ConfigPath
+from arkml.utils.utils import ConfigPath
 from arkml.core.app_context import ArkMLContext
 from arkml.core.factory import build_model
 from arkml.core.registry import ALGOS

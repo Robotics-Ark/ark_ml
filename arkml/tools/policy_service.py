@@ -8,7 +8,7 @@ and spins it as a long-lived service that communicates over LCM.
 import hydra
 import torch
 from ark.client.comm_infrastructure.base_node import main
-from ark.utils.utils import ConfigPath
+from arkml.utils.utils import ConfigPath
 from arkml.core.app_context import ArkMLContext
 from arkml.nodes.policy_registry import get_policy_node
 from arkml.utils.schema_io import get_visual_features
