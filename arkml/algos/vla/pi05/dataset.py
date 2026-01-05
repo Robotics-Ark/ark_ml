@@ -87,6 +87,8 @@ class Pi05Dataset(Dataset):
                 - "modality": Modality type for multi-stage training
                 - "prefix_tokens": For pretrain stage
                 - "target_tokens": For pretrain stage
+                - "observation.language.tokens": Language token tensor
+                - "observation.language.attention_mask": Attention mask tensor
         """
         # In real implementation, load actual trajectory data at index `idx`
         # For demonstration, create mock data that matches LeRobot Pi0.5 expectations
@@ -114,6 +116,12 @@ class Pi05Dataset(Dataset):
         # For post-training stage - keep continuous actions
         actions_cont = action
 
+        # Mock language tokens - simulate variable length sequences
+        # In real implementation, this would come from the actual language data
+        language_seq_len = np.random.randint(10, 50)  # Variable length between 10-50
+        language_tokens = torch.randint(0, 1000, (language_seq_len,), dtype=torch.long)  # Random tokens
+        attention_mask = torch.ones(language_seq_len, dtype=torch.long)  # All tokens are valid
+
         sample = {
             "observation.images.image": image,
             "observation.state": state,
@@ -121,7 +129,9 @@ class Pi05Dataset(Dataset):
             "modality": [modality],  # Using list to match expected format
             "prefix_tokens": torch.zeros(50, dtype=torch.long),  # Placeholder
             "target_tokens": fast_tokens if modality == "fast_robot_actions" else torch.zeros(10, dtype=torch.long),
-            "actions_cont": actions_cont
+            "actions_cont": actions_cont,
+            "observation.language.tokens": language_tokens,
+            "observation.language.attention_mask": attention_mask
         }
 
         return sample
@@ -165,6 +175,7 @@ def pi05_collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Ten
     """
     Custom collate function for Pi0.5 dataset.
     Handles batching of different modalities and sequence lengths.
+    Specifically handles variable-length language tokens and attention masks.
     """
     if not batch:
         return {}
@@ -172,7 +183,7 @@ def pi05_collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Ten
     # Stack tensors that should be batched
     collated_batch = {}
 
-    # Keys that need to be stacked
+    # Keys that need to be stacked (fixed size)
     stack_keys = ["observation.images.image", "observation.state", "action", "actions_cont"]
 
     # Keys that might be single values per batch
@@ -180,6 +191,9 @@ def pi05_collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Ten
 
     # Keys that might have different lengths (for tokenization)
     variable_keys = ["prefix_tokens", "target_tokens"]
+
+    # Language-specific keys that need special handling for padding
+    language_keys = ["observation.language.tokens", "observation.language.attention_mask"]
 
     for key in batch[0].keys():
         values = [item[key] for item in batch]
@@ -214,6 +228,20 @@ def pi05_collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Ten
                 if v.shape[0] < max_len:
                     # Pad to max length with padding token (0)
                     padding_size = [max_len - v.shape[0]]
+                    v = torch.cat([v, torch.zeros(*padding_size, dtype=v.dtype, device=v.device)], dim=0)
+                padded_values.append(v)
+            collated_batch[key] = torch.stack(padded_values, dim=0)
+        elif key in language_keys:
+            # Handle language tokens and attention masks with special padding logic
+            # Both tokens and attention_mask should have the same sequence length per item
+            max_len = max([v.shape[0] if v.dim() > 0 else 1 for v in values])
+            padded_values = []
+            for v in values:
+                if v.dim() == 0:  # scalar
+                    v = v.unsqueeze(0)
+                if v.shape[0] < max_len:
+                    # Pad to max length - for tokens use 0 (pad token), for attention_mask use 0 (ignore)
+                    padding_size = [max_len - v.shape[0]] + list(v.shape[1:])
                     v = torch.cat([v, torch.zeros(*padding_size, dtype=v.dtype, device=v.device)], dim=0)
                 padded_values.append(v)
             collated_batch[key] = torch.stack(padded_values, dim=0)

@@ -20,20 +20,45 @@ class Pi05Algorithm(BaseAlgorithm):
         self.device = device
         self.cfg = cfg
 
-        # Extract training configuration
-        self.lr = cfg.algo.trainer.get('lr', 2e-4)
-        self.batch_size = cfg.algo.trainer.get('batch_size', 8)
-        self.max_epochs = cfg.algo.trainer.get('max_epochs', 10)
-        self.weight_decay = cfg.algo.trainer.get('weight_decay', 0.0)
-        self.num_workers = cfg.algo.trainer.get('num_workers', 4)
-        self.use_bf16 = cfg.algo.trainer.get('use_bf16', True)
+        # Extract trainer configuration with safe defaults
+        # Follow the intended architecture: cfg.algo.trainer, cfg.algo.training, etc.
+        # But be robust to missing algo section for rollout scenarios
+        algo_cfg = getattr(cfg, 'algo', {})
 
-        # Training-specific config
-        self.training_stage = cfg.algo.training.get('stage', 'pretrain')
-        self.flow_alpha = cfg.algo.training.get('flow_alpha', 10.0)
-        self.pretrain_steps = cfg.algo.training.get('pretrain_steps', 280000)
-        self.posttrain_steps = cfg.algo.training.get('posttrain_steps', 80000)
-        self.integration_steps = cfg.algo.training.get('integration_steps', 10)
+        # If algo section is missing, try to use top-level config as fallback for rollout
+        if not algo_cfg:
+            # For rollout scenarios where full training config isn't provided
+            trainer_cfg = getattr(cfg, 'trainer', {})
+        else:
+            # For training scenarios following maintainer's intended structure
+            trainer_cfg = getattr(algo_cfg, 'trainer', {})
+
+        self.lr = getattr(trainer_cfg, 'lr', 2e-4)
+        self.batch_size = getattr(trainer_cfg, 'batch_size', 8)
+        self.max_epochs = getattr(trainer_cfg, 'max_epochs', 10)
+        self.weight_decay = getattr(trainer_cfg, 'weight_decay', 0.0)
+        self.num_workers = getattr(trainer_cfg, 'num_workers', 4)
+        self.use_bf16 = getattr(trainer_cfg, 'use_bf16', True)
+
+        # Training-specific config following the intended architecture
+        if not algo_cfg:
+            # Rollout scenario fallback
+            training_cfg = getattr(cfg, 'training', {})
+            dataset_cfg = getattr(cfg, 'dataset', {})
+        else:
+            # Training scenario - maintainer's intended structure
+            training_cfg = getattr(algo_cfg, 'training', {})
+            dataset_cfg = getattr(algo_cfg, 'dataset', {})
+
+        self._training_config = training_cfg
+        self._dataset_config = dataset_cfg
+
+        # Set defaults that can be overridden during training if needed
+        self.training_stage = getattr(self._training_config, 'stage', 'pretrain')
+        self.flow_alpha = getattr(self._training_config, 'flow_alpha', 10.0)
+        self.pretrain_steps = getattr(self._training_config, 'pretrain_steps', 280000)
+        self.posttrain_steps = getattr(self._training_config, 'posttrain_steps', 80000)
+        self.integration_steps = getattr(self._training_config, 'integration_steps', 10)
 
     def train(self) -> Any:
         """
@@ -57,11 +82,22 @@ class Pi05Algorithm(BaseAlgorithm):
             ]
         )
 
-        # Load dataset
+        # Load dataset - check if dataset config exists
+        dataset_path = getattr(self._dataset_config, 'dataset_path', None)
+        if dataset_path is None:
+            raise ValueError("Dataset path is required for training but not provided in config")
+
+        # Get pred_horizon from either cfg.algo.model or cfg.model
+        algo_cfg = getattr(self.cfg, 'algo', {})
+        model_cfg = getattr(algo_cfg, 'model', {})
+        if not model_cfg:  # If algo.model is empty, check top-level model
+            model_cfg = getattr(self.cfg, 'model', {})
+        pred_horizon = getattr(model_cfg, 'pred_horizon', 1)
+
         dataset = Pi05Dataset(
-            dataset_path=self.cfg.algo.dataset.dataset_path,
+            dataset_path=dataset_path,
             transform=transform,
-            pred_horizon=self.cfg.algo.model.pred_horizon,
+            pred_horizon=pred_horizon,
         )
 
         # Train/val split (80/20)
@@ -74,10 +110,11 @@ class Pi05Algorithm(BaseAlgorithm):
             generator=torch.Generator().manual_seed(42),
         )
 
-        num_workers = self.cfg.algo.training.num_workers
+        num_workers = getattr(self._training_config, 'num_workers', self.num_workers)
+        batch_size = getattr(self._training_config, 'batch_size', self.batch_size)
         train_dataloader = torch.utils.data.DataLoader(
             train_dataset,
-            batch_size=self.cfg.algo.training.batch_size,
+            batch_size=batch_size,
             shuffle=True,
             num_workers=num_workers,
             pin_memory=True,
@@ -86,7 +123,7 @@ class Pi05Algorithm(BaseAlgorithm):
 
         val_dataloader = torch.utils.data.DataLoader(
             val_dataset,
-            batch_size=self.cfg.algo.training.batch_size,
+            batch_size=batch_size,
             shuffle=False,
             num_workers=num_workers,
             pin_memory=True,
@@ -98,12 +135,12 @@ class Pi05Algorithm(BaseAlgorithm):
             model=self.policy,
             dataloader=train_dataloader,
             device=self.device,
-            lr=self.cfg.algo.training.lr,
-            weight_decay=getattr(self.cfg.algo.training, "weight_decay", 0.0),
-            num_epochs=getattr(self.cfg.algo.training, "max_epochs", 3),
-            grad_accum=getattr(self.cfg.algo.training, "grad_accum", 8),
-            output_dir=self.cfg.output_dir,
-            use_bf16=getattr(self.cfg.algo.training, "use_bf16", False),
+            lr=getattr(self._training_config, 'lr', self.lr),
+            weight_decay=getattr(self._training_config, "weight_decay", self.weight_decay),
+            num_epochs=getattr(self._training_config, "max_epochs", self.max_epochs),
+            grad_accum=getattr(self._training_config, "grad_accum", 8),
+            output_dir=getattr(self.cfg, 'output_dir', './output'),
+            use_bf16=getattr(self._training_config, "use_bf16", self.use_bf16),
             flow_alpha=self.flow_alpha,
             val_dataloader=val_dataloader,
             eval_every=1

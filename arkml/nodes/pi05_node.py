@@ -97,12 +97,15 @@ class Pi05Node(PolicyNode):
           A batch dictionary with:
             - per-camera image tensors: ``torch.FloatTensor`` of shape ``[1, C, H, W]``.
             - ``state``: ``torch.FloatTensor`` of shape ``[1, D]`` if present.
-            - ``task``: ``list[str]`` of length 1.
+            - ``task``: ``list[str]`` of length 1 (optional - can be omitted if no language input).
         """
-        # Use provided text input or default to empty string if not available
+        obs = {}
+
+        # Use provided text input if available, otherwise don't include task key
         # This allows the system to work when language input is not provided by Ark
-        task_text = self.text_input if self.text_input is not None else ""
-        obs = {"task": [task_text]}
+        if self.text_input is not None and self.text_input.strip() != "":
+            obs["task"] = [self.text_input]
+        # If no text input, we don't add the task key, and the policy will handle it
 
         state = np.concatenate(
             [

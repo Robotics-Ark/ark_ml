@@ -188,31 +188,75 @@ class Pi05Policy(BasePolicy):
             Processed observation with keys:
                 - "observation.images.image": torch.Tensor on `self.device`
                 - "observation.state": torch.Tensor on `self.device`
-                - "observation.language.tokens": torch.Tensor on `self.device` (when task is provided)
+                - "observation.language.tokens": torch.Tensor on `self.device`
+                - "observation.language.attention_mask": torch.Tensor on `self.device`
                 - "action": torch.Tensor on `self.device` (if present)
         """
         obs = {}
+
+        # Handle language tokens and attention mask first to ensure they're always present
+        # Default to empty language tensors if no task is provided
+        if "task" not in observation:
+            # Create empty language tensors with batch size inferred from other tensors
+            batch_size = 1  # Default batch size
+            # Look for batch size in other tensors if available
+            for key, value in observation.items():
+                if torch.is_tensor(value) and value.dim() > 0:
+                    batch_size = value.shape[0]
+                    break
+
+            # Create empty language tokens and attention mask
+            dummy_tokens = torch.zeros(batch_size, 10, dtype=torch.long, device=self.device)
+            dummy_attention_mask = torch.zeros(batch_size, 10, dtype=torch.long, device=self.device)
+
+            obs["observation.language.tokens"] = dummy_tokens
+            obs["observation.language.attention_mask"] = dummy_attention_mask
+        else:
+            # Handle language tokens for the LeRobot PI05 policy
+            # The policy expects language tokens under observation.language.tokens
+            # Create appropriate language tokens based on the task
+            v = observation["task"]
+            if isinstance(v, list) and len(v) > 0:
+                # Task is a batch of strings - create tokens for each
+                batch_size = len(v)
+                # In a real implementation, use the model's tokenizer
+                dummy_tokens = torch.zeros(batch_size, 10, dtype=torch.long, device=self.device)
+                dummy_attention_mask = torch.zeros(batch_size, 10, dtype=torch.long, device=self.device)
+                obs["observation.language.tokens"] = dummy_tokens
+                obs["observation.language.attention_mask"] = dummy_attention_mask
+            elif isinstance(v, str):
+                # Single task string - create a batched tensor [1, seq_len]
+                dummy_tokens = torch.zeros(1, 10, dtype=torch.long, device=self.device)
+                dummy_attention_mask = torch.zeros(1, 10, dtype=torch.long, device=self.device)
+                obs["observation.language.tokens"] = dummy_tokens
+                obs["observation.language.attention_mask"] = dummy_attention_mask
+            else:
+                # If task is already in token format, use as is
+                if torch.is_tensor(v):
+                    tokens_tensor = v.to(self.device)
+                    # Ensure it has the right shape [batch_size, seq_len]
+                    if tokens_tensor.dim() == 1:
+                        tokens_tensor = tokens_tensor.unsqueeze(0)  # Add batch dimension
+                    obs["observation.language.tokens"] = tokens_tensor
+
+                    # Create corresponding attention mask
+                    attention_mask = torch.ones_like(tokens_tensor, dtype=torch.long, device=self.device)
+                    obs["observation.language.attention_mask"] = attention_mask
+                else:
+                    # Handle other formats by creating dummy tensors
+                    batch_size = 1
+                    dummy_tokens = torch.zeros(batch_size, 10, dtype=torch.long, device=self.device)
+                    dummy_attention_mask = torch.zeros(batch_size, 10, dtype=torch.long, device=self.device)
+                    obs["observation.language.tokens"] = dummy_tokens
+                    obs["observation.language.attention_mask"] = dummy_attention_mask
+
+        # Process other observation keys
         for k, v in observation.items():
             if k == "state":
                 obs["observation.state"] = v.to(self.device)
             elif k == "task":
-                # Handle language tokens for the LeRobot PI05 policy
-                # The policy expects language tokens under observation.language.tokens
-                # Create appropriate language tokens based on the task
-                if isinstance(v, list) and len(v) > 0:
-                    # Task is a batch of strings - create dummy tokens for each
-                    # In a real implementation, use the model's tokenizer
-                    batch_size = len(v)
-                    # Create dummy tokens tensor [batch_size, seq_len]
-                    dummy_tokens = torch.zeros(batch_size, 10, dtype=torch.long, device=self.device)
-                    obs["observation.language.tokens"] = dummy_tokens
-                elif isinstance(v, str):
-                    # Single task string - create a batched tensor [1, seq_len]
-                    dummy_tokens = torch.zeros(1, 10, dtype=torch.long, device=self.device)
-                    obs["observation.language.tokens"] = dummy_tokens
-                else:
-                    # If task is already in token format, use as is
-                    obs["observation.language.tokens"] = v.to(self.device) if torch.is_tensor(v) else v
+                # Already handled above
+                continue
             elif k in {"action", "action_is_pad"}:
                 obs[k] = v.to(self.device)
             elif k in ArkMLContext.visual_input_features:
