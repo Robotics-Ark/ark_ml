@@ -107,38 +107,93 @@ class Pi05Node(PolicyNode):
             obs["task"] = [self.text_input]
         # If no text input, we don't add the task key, and the policy will handle it
 
-        state = np.concatenate(
-            [
-                np.ravel(ob["proprio::pose::position"]),
-                np.ravel(ob["proprio::pose::orientation"]),
-                np.ravel([ob["proprio::joint_state::position"][-2:]]),
-            ]
-        )
+        # Required observation keys - must have at least one visual input or state input
+        # Check for required proprioception data with defensive access
+        position_data = ob.get("proprio::pose::position")
+        orientation_data = ob.get("proprio::pose::orientation")
+        joint_state_data = ob.get("proprio::joint_state::position")
+
+        # Build state tensor with defensive fallbacks
+        state_components = []
+
+        # Add position data if available, otherwise use zero tensor
+        if position_data is not None:
+            state_components.append(np.ravel(position_data))
+        else:
+            # Fallback: use zero tensor of expected size based on model config
+            model_cfg = ArkMLContext.cfg.get("algo", {}).get("model", {})
+            obs_dim = model_cfg.get("obs_dim", 9)  # Default to 9 if not specified
+            # Calculate how many elements we need for position based on expected total
+            # For now, assume position is 3 elements (x, y, z)
+            state_components.append(np.zeros(3, dtype=np.float32))
+
+        # Add orientation data if available, otherwise use zero tensor
+        if orientation_data is not None:
+            state_components.append(np.ravel(orientation_data))
+        else:
+            # Fallback: assume orientation is 3 elements (roll, pitch, yaw) or 4 (quaternion)
+            # Using 3 for now to match the expected total
+            state_components.append(np.zeros(3, dtype=np.float32))
+
+        # Add joint state data if available, otherwise use zero tensor
+        if joint_state_data is not None:
+            # Take the last 2 joint positions as in the original code
+            joint_positions = np.ravel([joint_state_data[-2:]])
+            state_components.append(joint_positions)
+        else:
+            # Fallback: use 2 zero elements for joint positions
+            state_components.append(np.zeros(2, dtype=np.float32))
+
+        # Concatenate all state components
+        state = np.concatenate(state_components)
         state = torch.from_numpy(state).float().unsqueeze(0)  # (1, D)
-        img = torch.from_numpy(ob["sensors::image_top::rgb"].copy()).permute(
-            2, 0, 1
-        )  # (C, H, W)
-        img = img.float().div(255.0).unsqueeze(0)  # (1, C, H, W)
-
         obs["state"] = state
-        #
-        # # State: tensor, ensure [1, D] float32
-        # state_value = ob.get("state")
-        # if state_value is not None:
-        #     if isinstance(state_value, torch.Tensor):
-        #         state_t = state_value
-        #     else:
-        #         state_t = torch.from_numpy(state_value)
-        #     if state_t.dim() == 1:
-        #         state_t = state_t.unsqueeze(0)
-        #     obs["state"] = state_t.to(dtype=torch.float32, copy=False)
 
-        # Images:  tensor, ensure [1, C, H, W]
+        # Handle image data with defensive access
+        # Check for the primary image key first
+        primary_image_data = ob.get("sensors::image_top::rgb")
+
+        if primary_image_data is not None:
+            # Use the available image data
+            img = torch.from_numpy(primary_image_data.copy()).permute(2, 0, 1)  # (C, H, W)
+            img = img.float().div(255.0).unsqueeze(0)  # (1, C, H, W)
+        else:
+            # Check if there are any visual input features defined and try to get one
+            visual_features = getattr(ArkMLContext, 'visual_input_features', [])
+            if visual_features:
+                # Try to get the first available visual input
+                first_visual_key = visual_features[0] if len(visual_features) > 0 else None
+                if first_visual_key and first_visual_key in ob:
+                    img_data = ob[first_visual_key]
+                    img = torch.from_numpy(img_data.copy()).permute(2, 0, 1)  # (C, H, W)
+                    img = img.float().div(255.0).unsqueeze(0)  # (1, C, H, W)
+                else:
+                    # Critical: No image data available - this is required for Pi05
+                    raise ValueError(
+                        f"No image data found in observation. Expected one of: "
+                        f"'sensors::image_top::rgb' or keys from visual_input_features: {visual_features}. "
+                        f"Available keys: {list(ob.keys())}"
+                    )
+            else:
+                # No visual features defined - this is a configuration issue
+                raise ValueError(
+                    f"No visual input features defined in ArkMLContext and no default image key found. "
+                    f"Pi05 requires visual input. Available observation keys: {list(ob.keys())}"
+                )
+
+        # Images: tensor, ensure [1, C, H, W] for all visual input features
         for cam_name in ArkMLContext.visual_input_features:
-            # value = ob.get(cam_name)
-            # if value is None:
-            #     raise KeyError(f"Missing visual input '{cam_name}' in observation")
-            obs[cam_name] = img  # _image_to_tensor(value).unsqueeze(0)
+            # Try to get the specific camera data, fallback to primary image if not available
+            cam_data = ob.get(cam_name)
+            if cam_data is not None:
+                cam_img = torch.from_numpy(cam_data.copy()).permute(2, 0, 1)  # (C, H, W)
+                cam_img = cam_img.float().div(255.0).unsqueeze(0)  # (1, C, H, W)
+                obs[cam_name] = cam_img
+            else:
+                # Use the primary image as fallback for missing camera data
+                # This maintains tensor shape consistency across all cameras
+                obs[cam_name] = img
+
         return obs
 
     def _callback_text_input(
