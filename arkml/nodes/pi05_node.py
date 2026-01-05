@@ -2,7 +2,6 @@ from collections import deque
 from typing import Any
 import numpy as np
 import torch
-from omegaconf import DictConfig
 from arkml.algos.vla.pi05.models import Pi05Policy
 from arkml.core.app_context import ArkMLContext
 from arkml.core.policy_node import PolicyNode
@@ -16,17 +15,17 @@ class Pi05Node(PolicyNode):
     Structurally identical to PiZeroPolicyNode, using Pi05Policy internally.
     """
 
-    def __init__(self, cfg: DictConfig, device: str = "cpu", **kwargs):
+    def __init__(self, device: str = "cpu", **kwargs):
         """
         Initialize the Pi0.5 policy node.
 
         Args:
-            cfg: Configuration object
             device: Device to run the model on
         """
+        cfg = ArkMLContext.cfg
         model_cfg = cfg.get("algo").get("model")
 
-        self.policy = Pi05Policy(
+        policy = Pi05Policy(
             policy_type=model_cfg.get("policy_type"),
             model_path=model_cfg.get("model_path"),
             obs_dim=model_cfg.get("obs_dim"),
@@ -36,7 +35,7 @@ class Pi05Node(PolicyNode):
         )
 
         super().__init__(
-            policy=self.policy,
+            policy=policy,
             device=device,
             policy_name=cfg.get("node_name"),
         )
