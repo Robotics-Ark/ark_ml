@@ -14,9 +14,6 @@ model:
   action_horizon: 1
   image_dim: [3, 480, 640]
 
-dataset:
-  dataset_path: ./data/pi05_dataset
-
 training:
   stage: pretrain
   pretrain_steps: 280000

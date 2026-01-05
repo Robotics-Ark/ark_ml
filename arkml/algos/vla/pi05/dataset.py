@@ -122,13 +122,24 @@ class Pi05Dataset(Dataset):
         language_tokens = torch.randint(0, 1000, (language_seq_len,), dtype=torch.long)  # Random tokens
         attention_mask = torch.ones(language_seq_len, dtype=torch.long)  # All tokens are valid
 
+        # Create target_tokens consistently - always as variable length but handled properly
+        # For "fast_robot_actions" modality, use the actual fast tokens
+        # For other modalities, create appropriate dummy tokens
+        if modality == "fast_robot_actions":
+            target_tokens = fast_tokens
+        else:
+            # For other modalities, create a reasonable dummy sequence instead of fixed length
+            # This ensures all samples have potentially variable-length target_tokens
+            dummy_len = np.random.randint(5, 15)  # Variable length for consistency
+            target_tokens = torch.randint(0, 100, (dummy_len,), dtype=torch.long)
+
         sample = {
             "observation.images.image": image,
             "observation.state": state,
             "action": action,
             "modality": [modality],  # Using list to match expected format
             "prefix_tokens": torch.zeros(50, dtype=torch.long),  # Placeholder
-            "target_tokens": fast_tokens if modality == "fast_robot_actions" else torch.zeros(10, dtype=torch.long),
+            "target_tokens": target_tokens,
             "actions_cont": actions_cont,
             "observation.language.tokens": language_tokens,
             "observation.language.attention_mask": attention_mask
@@ -210,9 +221,10 @@ def pi05_collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Ten
                     if v.dim() == 0:  # scalar
                         v = v.unsqueeze(0)
                     if v.shape[0] < max_len:
-                        # Pad to max length
-                        padding_size = [max_len - v.shape[0]] + list(v.shape[1:])
-                        v = torch.cat([v, torch.zeros(*padding_size, dtype=v.dtype)], dim=0)
+                        # Pad to max length - use preallocated tensor to avoid storage resize issues
+                        padded_v = torch.zeros([max_len] + list(v.shape[1:]), dtype=v.dtype, device=v.device)
+                        padded_v[:v.shape[0]] = v.clone()  # Use clone() to ensure memory ownership
+                        v = padded_v
                     padded_values.append(v)
                 collated_batch[key] = torch.stack(padded_values, dim=0)
         elif key in single_keys:
@@ -226,9 +238,10 @@ def pi05_collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Ten
                 if v.dim() == 0:  # scalar
                     v = v.unsqueeze(0)
                 if v.shape[0] < max_len:
-                    # Pad to max length with padding token (0)
-                    padding_size = [max_len - v.shape[0]]
-                    v = torch.cat([v, torch.zeros(*padding_size, dtype=v.dtype, device=v.device)], dim=0)
+                    # Pad to max length with padding token (0) - use preallocated tensor to avoid storage resize issues
+                    padded_v = torch.zeros([max_len], dtype=v.dtype, device=v.device)
+                    padded_v[:v.shape[0]] = v.clone()  # Use clone() to ensure memory ownership
+                    v = padded_v
                 padded_values.append(v)
             collated_batch[key] = torch.stack(padded_values, dim=0)
         elif key in language_keys:
@@ -241,16 +254,24 @@ def pi05_collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Ten
                     v = v.unsqueeze(0)
                 if v.shape[0] < max_len:
                     # Pad to max length - for tokens use 0 (pad token), for attention_mask use 0 (ignore)
-                    padding_size = [max_len - v.shape[0]] + list(v.shape[1:])
-                    v = torch.cat([v, torch.zeros(*padding_size, dtype=v.dtype, device=v.device)], dim=0)
+                    # Use preallocated tensor to avoid storage resize issues
+                    padded_v = torch.zeros([max_len] + list(v.shape[1:]), dtype=v.dtype, device=v.device)
+                    padded_v[:v.shape[0]] = v.clone()  # Use clone() to ensure memory ownership
+                    v = padded_v
                 padded_values.append(v)
             collated_batch[key] = torch.stack(padded_values, dim=0)
         else:
-            # For other keys, stack if possible
-            try:
-                collated_batch[key] = torch.stack(values, dim=0)
-            except RuntimeError:
-                # If they can't be stacked, keep as list
+            # For any other keys not explicitly handled, we should not stack tensors
+            # without explicit padding logic. This prevents the variable-length tensor
+            # stacking error. If we encounter an unknown tensor key, we keep it as a list
+            # to avoid attempting to stack variable-length tensors.
+            # This eliminates the fragile logic that could cause stack errors.
+            if any(torch.is_tensor(v) for v in values):
+                # If there are tensors in this key, but it's not in our known categories,
+                # we keep them as a list to avoid stack errors
+                collated_batch[key] = values
+            else:
+                # If they're not tensors, keep as is
                 collated_batch[key] = values
 
     return collated_batch

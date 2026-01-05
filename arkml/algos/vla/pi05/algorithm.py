@@ -84,7 +84,7 @@ class Pi05Algorithm(BaseAlgorithm):
 
         # Load dataset - check if dataset config exists
         dataset_path = getattr(self._dataset_config, 'dataset_path', None)
-        if dataset_path is None:
+        if self.cfg.data.dataset_path is None:
             raise ValueError("Dataset path is required for training but not provided in config")
 
         # Get pred_horizon from either cfg.algo.model or cfg.model
@@ -95,7 +95,7 @@ class Pi05Algorithm(BaseAlgorithm):
         pred_horizon = getattr(model_cfg, 'pred_horizon', 1)
 
         dataset = Pi05Dataset(
-            dataset_path=dataset_path,
+            dataset_path=self.cfg.data.dataset_path,
             transform=transform,
             pred_horizon=pred_horizon,
         )
