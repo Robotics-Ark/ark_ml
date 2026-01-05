@@ -114,12 +114,14 @@ class Pi05Policy(BasePolicy):
         action_dim: int = 8,
         image_dim: tuple = (3, 480, 640),
         pred_horizon: int = 1,
+        visual_input_features: list = None,  # Make visual_input_features injectable to avoid ArkMLContext dependency during training
     ):
         super().__init__()
         self.obs_dim = obs_dim
         self.action_dim = action_dim
         self.image_dim = image_dim
         self.device = None
+        self.visual_input_features = visual_input_features or []  # Use provided features or empty list
 
         kind = policy_type.lower()
         if kind != "pi0.5":
@@ -259,7 +261,7 @@ class Pi05Policy(BasePolicy):
                 continue
             elif k in {"action", "action_is_pad"}:
                 obs[k] = v.to(self.device)
-            elif k in ArkMLContext.visual_input_features:
+            elif k in self.visual_input_features:
                 obs[f"observation.images.{k}"] = v.to(self.device)
             elif k == "image":
                 obs["observation.images.image"] = v.to(self.device)
@@ -394,7 +396,8 @@ class Pi05Policy(BasePolicy):
                 type=FeatureType.STATE, shape=(self.obs_dim,)
             )
         }
-        for cam_name in ArkMLContext.visual_input_features:
+        # Use instance variable instead of global context to avoid training dependency
+        for cam_name in self.visual_input_features:
             input_features[f"observation.images.{cam_name}"] = PolicyFeature(
                 type=FeatureType.VISUAL, shape=self.image_dim
             )
