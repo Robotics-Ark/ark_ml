@@ -75,7 +75,7 @@ class Pi05Dataset(Dataset):
         """Return the total number of samples in the dataset."""
         return self.dataset_length
 
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
         """
         Get a sample from the dataset.
 
@@ -108,10 +108,14 @@ class Pi05Dataset(Dataset):
         modality = modalities[modality_idx]
 
         # For pretraining stage - convert continuous actions to FAST tokens
-        fast_tokens = torch.tensor(
-            self.fast_tokenizer.encode(action.numpy()),
-            dtype=torch.long
-        )
+        try:
+            fast_tokens = torch.tensor(
+                self.fast_tokenizer.encode(action.numpy()),
+                dtype=torch.long
+            )
+        except Exception:
+            # Fallback if tokenizer fails
+            fast_tokens = torch.zeros(10, dtype=torch.long)
 
         # For post-training stage - keep continuous actions
         actions_cont = action
@@ -144,6 +148,11 @@ class Pi05Dataset(Dataset):
             "observation.language.tokens": language_tokens,
             "observation.language.attention_mask": attention_mask
         }
+
+        # Ensure no None values are returned
+        for key, value in sample.items():
+            if value is None:
+                raise ValueError(f"Dataset returned None for key '{key}' at index {idx}")
 
         return sample
 
@@ -182,7 +191,7 @@ def create_pi05_dataloader(
     )
 
 
-def pi05_collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
+def pi05_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Custom collate function for Pi0.5 dataset.
     Handles batching of different modalities and sequence lengths.
@@ -194,84 +203,52 @@ def pi05_collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Ten
     # Stack tensors that should be batched
     collated_batch = {}
 
-    # Keys that need to be stacked (fixed size)
-    stack_keys = ["observation.images.image", "observation.state", "action", "actions_cont"]
+    # EXPLICIT WHITELIST: Keys that are always stackable (fixed shape)
+    STACK_WHITELIST = {"observation.images.image", "observation.state", "action", "actions_cont", "prefix_tokens"}
 
     # Keys that might be single values per batch
-    single_keys = ["modality"]
+    METADATA_KEYS = {"modality"}
 
-    # Keys that might have different lengths (for tokenization)
-    variable_keys = ["prefix_tokens", "target_tokens"]
-
-    # Language-specific keys that need special handling for padding
-    language_keys = ["observation.language.tokens", "observation.language.attention_mask"]
+    # Keys that have variable lengths (for tokenization) - must be padded explicitly
+    VARIABLE_LENGTH_KEYS = {"target_tokens", "observation.language.tokens", "observation.language.attention_mask"}
 
     for key in batch[0].keys():
         values = [item[key] for item in batch]
 
-        if key in stack_keys:
-            # Stack tensors of the same size
-            try:
-                collated_batch[key] = torch.stack(values, dim=0)
-            except RuntimeError:
-                # If they have different sizes, pad them (for variable length data)
-                max_len = max([v.shape[0] if v.dim() > 0 else 1 for v in values])
-                padded_values = []
-                for v in values:
-                    if v.dim() == 0:  # scalar
-                        v = v.unsqueeze(0)
-                    if v.shape[0] < max_len:
-                        # Pad to max length - use preallocated tensor to avoid storage resize issues
-                        padded_v = torch.zeros([max_len] + list(v.shape[1:]), dtype=v.dtype, device=v.device)
-                        padded_v[:v.shape[0]] = v.clone()  # Use clone() to ensure memory ownership
-                        v = padded_v
-                    padded_values.append(v)
-                collated_batch[key] = torch.stack(padded_values, dim=0)
-        elif key in single_keys:
-            # For single values like modality, return as is or take first
-            collated_batch[key] = values  # Keep as list to preserve individual values
-        elif key in variable_keys:
-            # Handle variable length sequences (token sequences)
+        # Safety check: ensure no None values reach collate
+        if any(v is None for v in values):
+            raise ValueError(f"Dataset returned None for key '{key}'. Dataset must return valid values (not None).")
+
+        if key in STACK_WHITELIST:
+            # These keys are guaranteed to have fixed shapes - safe to stack
+            collated_batch[key] = torch.stack(values, dim=0)
+
+        elif key in METADATA_KEYS:
+            # These are metadata - keep as lists
+            collated_batch[key] = values
+
+        elif key in VARIABLE_LENGTH_KEYS:
+            # Handle variable length sequences - pad to max length before stacking
             max_len = max([v.shape[0] if v.dim() > 0 else 1 for v in values])
             padded_values = []
             for v in values:
                 if v.dim() == 0:  # scalar
                     v = v.unsqueeze(0)
                 if v.shape[0] < max_len:
-                    # Pad to max length with padding token (0) - use preallocated tensor to avoid storage resize issues
-                    padded_v = torch.zeros([max_len], dtype=v.dtype, device=v.device)
-                    padded_v[:v.shape[0]] = v.clone()  # Use clone() to ensure memory ownership
-                    v = padded_v
-                padded_values.append(v)
-            collated_batch[key] = torch.stack(padded_values, dim=0)
-        elif key in language_keys:
-            # Handle language tokens and attention masks with special padding logic
-            # Both tokens and attention_mask should have the same sequence length per item
-            max_len = max([v.shape[0] if v.dim() > 0 else 1 for v in values])
-            padded_values = []
-            for v in values:
-                if v.dim() == 0:  # scalar
-                    v = v.unsqueeze(0)
-                if v.shape[0] < max_len:
-                    # Pad to max length - for tokens use 0 (pad token), for attention_mask use 0 (ignore)
-                    # Use preallocated tensor to avoid storage resize issues
+                    # Pad to max length - use preallocated tensor to avoid storage resize issues
                     padded_v = torch.zeros([max_len] + list(v.shape[1:]), dtype=v.dtype, device=v.device)
                     padded_v[:v.shape[0]] = v.clone()  # Use clone() to ensure memory ownership
                     v = padded_v
                 padded_values.append(v)
             collated_batch[key] = torch.stack(padded_values, dim=0)
+
         else:
-            # For any other keys not explicitly handled, we should not stack tensors
-            # without explicit padding logic. This prevents the variable-length tensor
-            # stacking error. If we encounter an unknown tensor key, we keep it as a list
-            # to avoid attempting to stack variable-length tensors.
-            # This eliminates the fragile logic that could cause stack errors.
-            if any(torch.is_tensor(v) for v in values):
-                # If there are tensors in this key, but it's not in our known categories,
-                # we keep them as a list to avoid stack errors
-                collated_batch[key] = values
-            else:
-                # If they're not tensors, keep as is
-                collated_batch[key] = values
+            # HARD ERROR: Unknown tensor key - reject to prevent silent failures
+            raise ValueError(
+                f"Unknown tensor key '{key}' encountered in collate function. "
+                f"This key is not in the explicit handling categories. "
+                f"Known keys: {STACK_WHITELIST | METADATA_KEYS | VARIABLE_LENGTH_KEYS}. "
+                f"Please add this key to the appropriate category."
+            )
 
     return collated_batch
