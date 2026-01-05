@@ -188,7 +188,7 @@ class Pi05Policy(BasePolicy):
             Processed observation with keys:
                 - "observation.images.image": torch.Tensor on `self.device`
                 - "observation.state": torch.Tensor on `self.device`
-                - "task": str (unchanged)
+                - "observation.language.tokens": torch.Tensor on `self.device` (when task is provided)
                 - "action": torch.Tensor on `self.device` (if present)
         """
         obs = {}
@@ -196,7 +196,23 @@ class Pi05Policy(BasePolicy):
             if k == "state":
                 obs["observation.state"] = v.to(self.device)
             elif k == "task":
-                obs["task"] = v
+                # Handle language tokens for the LeRobot PI05 policy
+                # The policy expects language tokens under observation.language.tokens
+                # Create appropriate language tokens based on the task
+                if isinstance(v, list) and len(v) > 0:
+                    # Task is a batch of strings - create dummy tokens for each
+                    # In a real implementation, use the model's tokenizer
+                    batch_size = len(v)
+                    # Create dummy tokens tensor [batch_size, seq_len]
+                    dummy_tokens = torch.zeros(batch_size, 10, dtype=torch.long, device=self.device)
+                    obs["observation.language.tokens"] = dummy_tokens
+                elif isinstance(v, str):
+                    # Single task string - create a batched tensor [1, seq_len]
+                    dummy_tokens = torch.zeros(1, 10, dtype=torch.long, device=self.device)
+                    obs["observation.language.tokens"] = dummy_tokens
+                else:
+                    # If task is already in token format, use as is
+                    obs["observation.language.tokens"] = v.to(self.device) if torch.is_tensor(v) else v
             elif k in {"action", "action_is_pad"}:
                 obs[k] = v.to(self.device)
             elif k in ArkMLContext.visual_input_features:

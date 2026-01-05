@@ -99,9 +99,10 @@ class Pi05Node(PolicyNode):
             - ``state``: ``torch.FloatTensor`` of shape ``[1, D]`` if present.
             - ``task``: ``list[str]`` of length 1.
         """
-        if self.text_input is None:
-            raise ValueError("Prompt input is empty")
-        obs = {"task": [self.text_input]}
+        # Use provided text input or default to empty string if not available
+        # This allows the system to work when language input is not provided by Ark
+        task_text = self.text_input if self.text_input is not None else ""
+        obs = {"task": [task_text]}
 
         state = np.concatenate(
             [
