@@ -207,7 +207,7 @@ class Pi05Policy(BasePolicy):
 
             # Create empty language tokens and attention mask
             dummy_tokens = torch.zeros(batch_size, 10, dtype=torch.long, device=self.device)
-            dummy_attention_mask = torch.zeros(batch_size, 10, dtype=torch.long, device=self.device)
+            dummy_attention_mask = torch.zeros(batch_size, 10, dtype=torch.bool, device=self.device)
 
             obs["observation.language.tokens"] = dummy_tokens
             obs["observation.language.attention_mask"] = dummy_attention_mask
@@ -221,13 +221,13 @@ class Pi05Policy(BasePolicy):
                 batch_size = len(v)
                 # In a real implementation, use the model's tokenizer
                 dummy_tokens = torch.zeros(batch_size, 10, dtype=torch.long, device=self.device)
-                dummy_attention_mask = torch.zeros(batch_size, 10, dtype=torch.long, device=self.device)
+                dummy_attention_mask = torch.zeros(batch_size, 10, dtype=torch.bool, device=self.device)
                 obs["observation.language.tokens"] = dummy_tokens
                 obs["observation.language.attention_mask"] = dummy_attention_mask
             elif isinstance(v, str):
                 # Single task string - create a batched tensor [1, seq_len]
                 dummy_tokens = torch.zeros(1, 10, dtype=torch.long, device=self.device)
-                dummy_attention_mask = torch.zeros(1, 10, dtype=torch.long, device=self.device)
+                dummy_attention_mask = torch.zeros(1, 10, dtype=torch.bool, device=self.device)
                 obs["observation.language.tokens"] = dummy_tokens
                 obs["observation.language.attention_mask"] = dummy_attention_mask
             else:
@@ -240,13 +240,13 @@ class Pi05Policy(BasePolicy):
                     obs["observation.language.tokens"] = tokens_tensor
 
                     # Create corresponding attention mask
-                    attention_mask = torch.ones_like(tokens_tensor, dtype=torch.long, device=self.device)
+                    attention_mask = torch.ones_like(tokens_tensor, dtype=torch.bool, device=self.device)
                     obs["observation.language.attention_mask"] = attention_mask
                 else:
                     # Handle other formats by creating dummy tensors
                     batch_size = 1
                     dummy_tokens = torch.zeros(batch_size, 10, dtype=torch.long, device=self.device)
-                    dummy_attention_mask = torch.zeros(batch_size, 10, dtype=torch.long, device=self.device)
+                    dummy_attention_mask = torch.zeros(batch_size, 10, dtype=torch.bool, device=self.device)
                     obs["observation.language.tokens"] = dummy_tokens
                     obs["observation.language.attention_mask"] = dummy_attention_mask
 

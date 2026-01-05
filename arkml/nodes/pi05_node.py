@@ -115,7 +115,7 @@ class Pi05Node(PolicyNode):
             ]
         )
         state = torch.from_numpy(state).float().unsqueeze(0)  # (1, D)
-        img = torch.from_numpy(ob["sensors::image_top::rgb"].copy()).permute(
+        img = torch.from_numpy(ob["sensors::top_camera::rgb"].copy()).permute(
             2, 0, 1
         )  # (C, H, W)
         img = img.float().div(255.0).unsqueeze(0)  # (1, C, H, W)
