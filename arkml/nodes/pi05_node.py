@@ -86,7 +86,7 @@ class Pi05Node(PolicyNode):
 
         return actions[0]
 
-    def prepare_observation(self, ob: dict[str, Any]):
+    def prepare_observation_temp(self, ob: dict[str, Any]):
         """Convert a single raw env observation into a batched policy input.
 
         Args:
@@ -110,7 +110,7 @@ class Pi05Node(PolicyNode):
         # VALIDATE REQUIRED OBSERVATION KEYS
         # Check for required proprioception data with explicit validation
         required_keys = ["proprio::pose::position", "proprio::pose::orientation", "proprio::joint_state::position"]
-        optional_keys = ["sensors::image_top::rgb"]  # Will be handled separately
+        optional_keys = [f"sensors::{ArkMLContext.visual_input_features[0]}::rgb"]  # Will be handled separately
 
         # Validate that observation contains at least some expected keys
         available_keys = set(ob.keys())
@@ -239,6 +239,59 @@ class Pi05Node(PolicyNode):
                 # This maintains tensor shape consistency across all cameras
                 obs[cam_name] = img
 
+        return obs
+    
+    def prepare_observation(self, ob: dict[str, Any]):
+        """Convert a single raw env observation into a batched policy input.
+
+        Args:
+          ob: Single observation dict from the env. Expected keys include
+            ``state`` and any camera names listed in ``visual_input_features``.
+
+        Returns:
+          A batch dictionary with:
+            - per-camera image tensors: ``torch.FloatTensor`` of shape ``[1, C, H, W]``.
+            - ``state``: ``torch.FloatTensor`` of shape ``[1, D]`` if present.
+            - ``task``: ``list[str]`` of length 1.
+        """
+        if self.text_input is None:
+            raise ValueError("Prompt input is empty")
+        obs = {"task": [self.text_input]}
+
+        state = np.concatenate(
+            [
+                np.ravel(ob["proprio::pose::position"]),
+                np.ravel(ob["proprio::pose::orientation"]),
+                np.ravel([ob["proprio::joint_state::position"][-2:]]),
+            ]
+        )
+        state = torch.from_numpy(state).float().unsqueeze(0)  # (1, D)
+        img = torch.from_numpy(
+            ob[f"sensors::{ArkMLContext.visual_input_features[0]}::rgb"].copy()
+        ).permute(
+            2, 0, 1
+        )  # (C, H, W)
+        img = img.float().div(255.0).unsqueeze(0)  # (1, C, H, W)
+
+        obs["state"] = state
+        #
+        # # State: tensor, ensure [1, D] float32
+        # state_value = ob.get("state")
+        # if state_value is not None:
+        #     if isinstance(state_value, torch.Tensor):
+        #         state_t = state_value
+        #     else:
+        #         state_t = torch.from_numpy(state_value)
+        #     if state_t.dim() == 1:
+        #         state_t = state_t.unsqueeze(0)
+        #     obs["state"] = state_t.to(dtype=torch.float32, copy=False)
+
+        # Images:  tensor, ensure [1, C, H, W]
+        for cam_name in ArkMLContext.visual_input_features:
+            # value = ob.get(cam_name)
+            # if value is None:
+            #     raise KeyError(f"Missing visual input '{cam_name}' in observation")
+            obs[cam_name] = img  # _image_to_tensor(value).unsqueeze(0)
         return obs
 
     def _callback_text_input(

@@ -168,6 +168,31 @@ class Pi05Policy(BasePolicy):
                 return value.shape[0]
         return 1
 
+    def _pad_action_sequence(self, action: torch.Tensor) -> torch.Tensor:
+        chunk_size = getattr(self._policy.config, "chunk_size", None)
+        if chunk_size is None:
+            return action
+        if action.dim() == 2:
+            action = action.unsqueeze(0)
+        if action.shape[1] >= chunk_size:
+            return action[:, :chunk_size]
+        pad_len = chunk_size - action.shape[1]
+        pad_shape = (action.shape[0], pad_len, action.shape[2])
+        pad = torch.zeros(pad_shape, dtype=action.dtype, device=action.device)
+        return torch.cat([action, pad], dim=1)
+
+    def _pad_action_is_pad(self, action_is_pad: torch.Tensor, batch_size: int) -> torch.Tensor:
+        chunk_size = getattr(self._policy.config, "chunk_size", None)
+        if chunk_size is None:
+            return action_is_pad
+        if action_is_pad.dim() == 1:
+            action_is_pad = action_is_pad.unsqueeze(0)
+        if action_is_pad.shape[1] >= chunk_size:
+            return action_is_pad[:, :chunk_size]
+        pad_len = chunk_size - action_is_pad.shape[1]
+        pad = torch.ones(batch_size, pad_len, dtype=action_is_pad.dtype, device=action_is_pad.device)
+        return torch.cat([action_is_pad, pad], dim=1)
+
     def to_device(self, device: str) -> Any:
         """
         Move the underlying policy to a device and return self.
@@ -273,7 +298,13 @@ class Pi05Policy(BasePolicy):
                 obs["task"] = v
                 # continue
             elif k in {"action", "action_is_pad"}:
-                obs[k] = v.to(self.device)
+                if k == "action":
+                    v = v.to(self.device)
+                    obs[k] = self._pad_action_sequence(v)
+                else:
+                    v = v.to(self.device)
+                    batch_size = self._infer_batch_size(observation)
+                    obs[k] = self._pad_action_is_pad(v, batch_size)
             elif k.startswith("observation.images."):
                 for im_key in ArkMLContext.visual_input_features:
                     obs[f"observation.images.{im_key}"] = v.to(self.device)
