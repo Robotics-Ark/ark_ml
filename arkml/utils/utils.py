@@ -1,13 +1,38 @@
 import ast
 import importlib
 import os
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
+import yaml
 from PIL import Image
 from torch import nn
 from torchvision import transforms
+
+
+class ConfigPath:
+    """
+    A utility class to handle configuration file paths and reading.
+    """
+    def __init__(self, path: str):
+        self.path = Path(path)
+
+    def read_yaml(self) -> dict:
+        """
+        Read and parse a YAML configuration file.
+
+        Returns:
+            The parsed configuration as a dictionary.
+        """
+        if self.path.exists():
+            with open(self.path, "r") as f:
+                cfg_dict = yaml.safe_load(f) or {}
+        else:
+            raise FileNotFoundError(f"Config file could not be found {self.path}")
+
+        return cfg_dict
 
 
 def _normalise_shape(shape_dim: str) -> tuple:

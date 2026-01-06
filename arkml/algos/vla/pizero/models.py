@@ -10,7 +10,7 @@ from arkml.core.policy import BasePolicy
 from arkml.core.registry import MODELS
 from arkml.utils.utils import print_trainable_summary
 from lerobot.configs.types import FeatureType, PolicyFeature
-from lerobot.policies.normalize import Normalize, Unnormalize
+from lerobot.processor.normalize_processor import NormalizerProcessorStep as Normalize, UnnormalizerProcessorStep as Unnormalize
 from lerobot.policies.pi0.modeling_pi0 import PI0Policy
 from torch import tensor
 
