@@ -12,7 +12,7 @@ model:
   obs_horizon: 1
   pred_horizon: 1
   action_horizon: 1
-  image_dim: [3, 480, 640]
+  image_dim: (3, 480, 640) # Image dimension (b,c,h,w)
 
 training:
   stage: pretrain
@@ -31,6 +31,6 @@ trainer:
   lr: 2e-4
   batch_size: 8
   max_epochs: 10
-  num_workers: 4
+  num_workers: 0
   use_bf16: true
   weight_decay: 0.0

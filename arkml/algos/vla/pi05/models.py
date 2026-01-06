@@ -198,7 +198,7 @@ class Pi05Policy(BasePolicy):
 
         # Handle language tokens and attention mask first to ensure they're always present
         # Default to empty language tensors if no task is provided
-        if "task" not in observation:
+        '''if "task" not in observation:
             # Create empty language tensors with batch size inferred from other tensors
             batch_size = 1  # Default batch size
             # Look for batch size in other tensors if available
@@ -251,17 +251,22 @@ class Pi05Policy(BasePolicy):
                     dummy_attention_mask = torch.zeros(batch_size, 10, dtype=torch.bool, device=self.device)
                     obs["observation.language.tokens"] = dummy_tokens
                     obs["observation.language.attention_mask"] = dummy_attention_mask
-
+        
+        '''
         # Process other observation keys
         for k, v in observation.items():
             if k == "state":
                 obs["observation.state"] = v.to(self.device)
             elif k == "task":
                 # Already handled above
-                continue
+                obs["task"] = v
+                #continue
             elif k in {"action", "action_is_pad"}:
                 obs[k] = v.to(self.device)
-            elif k in self.visual_input_features:
+            elif k.startswith("observation.images."):
+                for im_key in ArkMLContext.visual_input_features:
+                    obs[f"observation.images.{im_key}"] = v.to(self.device)
+            elif k in ArkMLContext.visual_input_features:
                 obs[f"observation.images.{k}"] = v.to(self.device)
             elif k == "image":
                 obs["observation.images.image"] = v.to(self.device)
@@ -397,7 +402,7 @@ class Pi05Policy(BasePolicy):
             )
         }
         # Use instance variable instead of global context to avoid training dependency
-        for cam_name in self.visual_input_features:
+        for cam_name in ArkMLContext.visual_input_features:
             input_features[f"observation.images.{cam_name}"] = PolicyFeature(
                 type=FeatureType.VISUAL, shape=self.image_dim
             )

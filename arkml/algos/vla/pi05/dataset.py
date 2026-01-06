@@ -1,254 +1,175 @@
-import json
 import os
-from typing import Dict, List, Any, Optional, Union
+import pickle
+from collections import OrderedDict
+from threading import Lock
+from typing import Any, Dict, List, Tuple
+
 import numpy as np
 import torch
-from torch.utils.data import Dataset, DataLoader
-from omegaconf import OmegaConf
-from arkml.algos.vla.tokenizers.fast import FASTTokenizer
+from arkml.core.app_context import ArkMLContext
+from arkml.utils.utils import _image_to_tensor
+from torch.utils.data import Dataset
+from torchvision import transforms
 
 
 class Pi05Dataset(Dataset):
-    """
-    Dataset class for Pi0.5 supporting multiple modalities.
-    Designed to work with LeRobot-based Pi0.5 policy.
-
-    Supports sampling from these modalities:
-    - web_caption
-    - qa
-    - hl_subtask
-    - fast_robot_actions
-    - continuous_robot_actions
-    """
-
     def __init__(
         self,
-        dataset_path: str,
-        obs_horizon: int = 1,
+        dataset_path,
+        transform=None,
         pred_horizon: int = 1,
-        image_keys: List[str] = ["image"],
-        state_keys: List[str] = ["state"],
-        action_keys: List[str] = ["action"],
-        tokenizer_vocab_path: str = "",
-        num_bins: int = 1000,
-        min_val: float = -1.0,
-        max_val: float = 1.0
+        image_base_index: int = 9,
+        # Caching controls
+        cache: str | None = "all",  # 'file', 'all'
+        # Maximum number of pickle files to keep in memory when using file cache.
+        # Set to None for unbounded (may use more RAM). Ignored when cache == "all".
+        max_cached_files: int | None = 16,
+        *args,
+        **kwargs,
     ):
-        self.dataset_path = dataset_path
-        self.obs_horizon = obs_horizon
         self.pred_horizon = pred_horizon
-        self.image_keys = image_keys
-        self.state_keys = state_keys
-        self.action_keys = action_keys
 
-        # FAST tokenizer for action conversion during pretrain stage
-        self.fast_tokenizer = FASTTokenizer(
-            vocab_path=tokenizer_vocab_path,
-            num_bins=num_bins,
-            min_val=min_val,
-            max_val=max_val
+        super().__init__()
+        self.dataset_path = dataset_path
+        self.transform = transform or transforms.ToTensor()
+        self.image_base_index = image_base_index
+
+        self.index_map = []
+        # cache options: None/"none" (no cache), "file" (LRU per-file cache), "all" (preload all files)
+        self.cache_mode = (cache or "none").lower()
+        if self.cache_mode not in {"none", "file", "all"}:
+            raise ValueError(f"Unknown cache mode: {self.cache_mode}")
+        self.max_cached_files = max_cached_files
+
+        # Per-process (worker) cache structures
+        self._cache_lock: Lock = Lock()
+        # LRU of file_path -> traj_list
+        self._file_cache: "OrderedDict[str, List[dict]]" = OrderedDict()
+
+        self._build_index_map()
+        if self.cache_mode == "all":
+            self._preload_all_files()
+
+    """Lazy-loading dataset that adapts to configurable visual inputs."""
+
+    def _build_index_map(self) -> None:
+        if not os.path.exists(self.dataset_path):
+            raise FileNotFoundError(
+                f"Dataset path '{self.dataset_path}' does not exist."
+            )
+
+        file_list = sorted(
+            [
+                os.path.join(self.dataset_path, f)
+                for f in os.listdir(self.dataset_path)
+                if f.endswith(".pkl")
+            ]
         )
 
-        # Load and validate dataset
-        self._load_dataset()
+        for fpath in file_list:
+            with open(fpath, "rb") as f:
+                traj_list = pickle.load(f)
+                for traj_idx, traj in enumerate(traj_list):
+                    actions = np.asarray(traj["action"], dtype=np.float32)
+                    if actions.size == 0:
+                        continue
+                    if actions.size == 1:
+                        actions = actions[None, :]
 
-    def _load_dataset(self):
+                    num_steps = actions.shape[0]
+
+                    for step_idx in range(num_steps):
+                        self.index_map.append((fpath, traj_idx, step_idx))
+
+    def _preload_all_files(self) -> None:
+        """Preload every pickle file referenced by the index into RAM.
+
+        This happens per DataLoader worker process (safe). Useful for maximum
+        throughput at the cost of memory. No-op if cache_mode != 'all'.
         """
-        Load dataset from the specified path.
-        This method should be implemented to load actual trajectories.
-        """
-        # In a real implementation, this would load LeRobot-compatible datasets
-        # For now we'll set up placeholders to demonstrate the structure
-        # This would typically interface with LeRobot's dataset loading utilities
+        if self.cache_mode != "all":
+            return
+        # Collect unique file paths from index_map
+        unique_files = sorted({f for f, _, _ in self.index_map})
+        for fpath in unique_files:
+            # Load once and insert into cache
+            with open(fpath, "rb") as f:
+                traj_list = pickle.load(f)
+            with self._cache_lock:
+                self._file_cache[fpath] = traj_list
 
-        # Placeholder: In real implementation, this would load from LeRobot dataset
-        # Example: self.dataset = LeRobotDataset.create_dataset_from_configs(...)
-        self.dataset_length = 1000  # Placeholder - actual length from real dataset
+    def _get_traj_list(self, fpath: str) -> List[dict]:
+        """Return trajectory list for file path, using cache if enabled."""
+        if self.cache_mode == "none":
+            with open(fpath, "rb") as f:
+                return pickle.load(f)
 
-        # The dataset should provide trajectories with:
-        # - Images: (T, C, H, W)
-        # - States: (T, state_dim)
-        # - Actions: (T, action_dim)
-        # Where T is the trajectory length
+        # file or all modes use the cache
+        with self._cache_lock:
+            cached = self._file_cache.get(fpath)
+            if cached is not None:
+                # Move to end to mark as recently used
+                self._file_cache.move_to_end(fpath)
+                return cached
 
-    def __len__(self):
-        """Return the total number of samples in the dataset."""
-        return self.dataset_length
+        # Not in cache: load from disk
+        with open(fpath, "rb") as f:
+            traj_list = pickle.load(f)
 
-    def __getitem__(self, idx: int) -> Dict[str, Any]:
-        """
-        Get a sample from the dataset.
+        # Insert into cache with LRU eviction for 'file' mode
+        with self._cache_lock:
+            self._file_cache[fpath] = traj_list
+            self._file_cache.move_to_end(fpath)
+            if self.cache_mode == "file" and self.max_cached_files is not None:
+                while len(self._file_cache) > self.max_cached_files:
+                    self._file_cache.popitem(last=False)
+        return traj_list
 
-        Returns:
-            dict: Dictionary containing:
-                - "observation.images.image": Image tensor
-                - "observation.state": State vector
-                - "action": Action vector
-                - "modality": Modality type for multi-stage training
-                - "prefix_tokens": For pretrain stage
-                - "target_tokens": For pretrain stage
-                - "observation.language.tokens": Language token tensor
-                - "observation.language.attention_mask": Attention mask tensor
-        """
-        # In real implementation, load actual trajectory data at index `idx`
-        # For demonstration, create mock data that matches LeRobot Pi0.5 expectations
+    def __len__(self) -> int:
+        return len(self.index_map)
 
-        # Mock image observation
-        image = torch.randn(3, 224, 224)  # Image tensor (C, H, W)
+    def __getitem__(self, idx) -> dict[str, Any]:
+        fpath, traj_idx, step_index = self.index_map[idx]
+        traj_list = self._get_traj_list(fpath)
+        trajectory = traj_list[traj_idx]
 
-        # Mock state observation
-        state = torch.randn(9)  # State vector
+        sample: dict[str, Any] = {"task": "Pick and plce the cube"}
 
-        # Mock action
-        action = torch.randn(8)  # Action vector
+        state_array = np.asarray(
+            trajectory["state"][6], dtype=np.float32
+        )  # TODO handle proper index based on data collection pipeline
+        sample["state"] = torch.from_numpy(state_array)
 
-        # Randomly assign a modality for multi-stage training
-        modalities = ["web_caption", "qa", "hl_subtask", "fast_robot_actions", "continuous_robot_actions"]
-        modality_idx = idx % len(modalities)
-        modality = modalities[modality_idx]
-
-        # For pretraining stage - convert continuous actions to FAST tokens
-        try:
-            fast_tokens = torch.tensor(
-                self.fast_tokenizer.encode(action.numpy()),
-                dtype=torch.long
+        for cam_index, cam_name in enumerate(ArkMLContext.visual_input_features):
+            image_value = trajectory.get(cam_name)
+            if image_value is None:
+                state_block = trajectory.get("state")
+                if state_block is not None:
+                    candidate_idx = self.image_base_index + cam_index
+                    if len(state_block) > candidate_idx:
+                        image_value = state_block[candidate_idx]
+            if image_value is None:
+                raise KeyError(f"Image data for '{cam_name}' not found in trajectory")
+            sample[cam_name] = _image_to_tensor(
+                image_value=image_value, transform=self.transform
             )
-        except Exception:
-            # Fallback if tokenizer fails
-            fast_tokens = torch.zeros(10, dtype=torch.long)
 
-        # For post-training stage - keep continuous actions
-        actions_cont = action
+        action_array = np.asarray(trajectory["action"], dtype=np.float32)
+        if action_array.ndim == 1:
+            action_array = action_array[None, :]
 
-        # Mock language tokens - simulate variable length sequences
-        # In real implementation, this would come from the actual language data
-        language_seq_len = np.random.randint(10, 50)  # Variable length between 10-50
-        language_tokens = torch.randint(0, 1000, (language_seq_len,), dtype=torch.long)  # Random tokens
-        attention_mask = torch.ones(language_seq_len, dtype=torch.long)  # All tokens are valid
+        action_window = action_array[step_index : step_index + self.pred_horizon]
+        horizon = action_window.shape[0]
+        padded_actions = np.zeros(
+            (self.pred_horizon, action_array.shape[1]), dtype=np.float32
+        )
+        padded_actions[:horizon] = action_window
 
-        # Create target_tokens consistently - always as variable length but handled properly
-        # For "fast_robot_actions" modality, use the actual fast tokens
-        # For other modalities, create appropriate dummy tokens
-        if modality == "fast_robot_actions":
-            target_tokens = fast_tokens
-        else:
-            # For other modalities, create a reasonable dummy sequence instead of fixed length
-            # This ensures all samples have potentially variable-length target_tokens
-            dummy_len = np.random.randint(5, 15)  # Variable length for consistency
-            target_tokens = torch.randint(0, 100, (dummy_len,), dtype=torch.long)
+        action_is_pad = np.ones(self.pred_horizon, dtype=bool)
+        action_is_pad[:horizon] = False
 
-        sample = {
-            "observation.images.image": image,
-            "observation.state": state,
-            "action": action,
-            "modality": [modality],  # Using list to match expected format
-            "prefix_tokens": torch.zeros(50, dtype=torch.long),  # Placeholder
-            "target_tokens": target_tokens,
-            "actions_cont": actions_cont,
-            "observation.language.tokens": language_tokens,
-            "observation.language.attention_mask": attention_mask
-        }
-
-        # Ensure no None values are returned
-        for key, value in sample.items():
-            if value is None:
-                raise ValueError(f"Dataset returned None for key '{key}' at index {idx}")
+        sample["action"] = torch.from_numpy(padded_actions)
+        sample["action_is_pad"] = torch.from_numpy(action_is_pad)
+        
 
         return sample
-
-
-def create_pi05_dataloader(
-    dataset_path: str,
-    batch_size: int,
-    shuffle: bool = True,
-    num_workers: int = 4,
-    pin_memory: bool = True,
-    **kwargs
-) -> DataLoader:
-    """
-    Create a dataloader for Pi0.5 dataset.
-
-    Args:
-        dataset_path: Path to the dataset
-        batch_size: Batch size for training
-        shuffle: Whether to shuffle the data
-        num_workers: Number of data loading workers
-        pin_memory: Whether to pin memory
-        **kwargs: Additional arguments for dataset initialization
-
-    Returns:
-        DataLoader configured for Pi0.5
-    """
-    dataset = Pi05Dataset(dataset_path, **kwargs)
-
-    return DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-        collate_fn=pi05_collate_fn  # Custom collate function if needed
-    )
-
-
-def pi05_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    Custom collate function for Pi0.5 dataset.
-    Handles batching of different modalities and sequence lengths.
-    Specifically handles variable-length language tokens and attention masks.
-    """
-    if not batch:
-        return {}
-
-    # Stack tensors that should be batched
-    collated_batch = {}
-
-    # EXPLICIT WHITELIST: Keys that are always stackable (fixed shape)
-    STACK_WHITELIST = {"observation.images.image", "observation.state", "action", "actions_cont", "prefix_tokens"}
-
-    # Keys that might be single values per batch
-    METADATA_KEYS = {"modality"}
-
-    # Keys that have variable lengths (for tokenization) - must be padded explicitly
-    VARIABLE_LENGTH_KEYS = {"target_tokens", "observation.language.tokens", "observation.language.attention_mask"}
-
-    for key in batch[0].keys():
-        values = [item[key] for item in batch]
-
-        # Safety check: ensure no None values reach collate
-        if any(v is None for v in values):
-            raise ValueError(f"Dataset returned None for key '{key}'. Dataset must return valid values (not None).")
-
-        if key in STACK_WHITELIST:
-            # These keys are guaranteed to have fixed shapes - safe to stack
-            collated_batch[key] = torch.stack(values, dim=0)
-
-        elif key in METADATA_KEYS:
-            # These are metadata - keep as lists
-            collated_batch[key] = values
-
-        elif key in VARIABLE_LENGTH_KEYS:
-            # Handle variable length sequences - pad to max length before stacking
-            max_len = max([v.shape[0] if v.dim() > 0 else 1 for v in values])
-            padded_values = []
-            for v in values:
-                if v.dim() == 0:  # scalar
-                    v = v.unsqueeze(0)
-                if v.shape[0] < max_len:
-                    # Pad to max length - use preallocated tensor to avoid storage resize issues
-                    padded_v = torch.zeros([max_len] + list(v.shape[1:]), dtype=v.dtype, device=v.device)
-                    padded_v[:v.shape[0]] = v.clone()  # Use clone() to ensure memory ownership
-                    v = padded_v
-                padded_values.append(v)
-            collated_batch[key] = torch.stack(padded_values, dim=0)
-
-        else:
-            # HARD ERROR: Unknown tensor key - reject to prevent silent failures
-            raise ValueError(
-                f"Unknown tensor key '{key}' encountered in collate function. "
-                f"This key is not in the explicit handling categories. "
-                f"Known keys: {STACK_WHITELIST | METADATA_KEYS | VARIABLE_LENGTH_KEYS}. "
-                f"Please add this key to the appropriate category."
-            )
-
-    return collated_batch
