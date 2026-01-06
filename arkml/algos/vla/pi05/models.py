@@ -10,7 +10,10 @@ from arkml.core.registry import MODELS
 from arkml.utils.utils import print_trainable_summary
 
 # Import from current LeRobot structure - will need to handle normalization differently
-from lerobot.policies.pi05.modeling_pi05 import PI05Policy as LeRobotPI05Policy  # Import the actual LeRobot Pi0.5 policy
+from lerobot.policies.pi05.modeling_pi05 import (
+    PI05Policy as LeRobotPI05Policy,
+)  # Import the actual LeRobot Pi0.5 policy
+
 # For configuration types
 from lerobot.configs.types import FeatureType, PolicyFeature
 from torch import tensor
@@ -24,6 +27,7 @@ class ActionFlowExpert(torch.nn.Module):
     Action Flow Expert module for Pi0.5.
     Handles action prediction using flow matching approach.
     """
+
     def __init__(self, hidden_dim: int, action_dim: int):
         super().__init__()
         self.hidden_dim = hidden_dim
@@ -35,7 +39,7 @@ class ActionFlowExpert(torch.nn.Module):
             torch.nn.ReLU(),
             torch.nn.Linear(hidden_dim // 2, hidden_dim // 4),
             torch.nn.ReLU(),
-            torch.nn.Linear(hidden_dim // 4, action_dim)
+            torch.nn.Linear(hidden_dim // 4, action_dim),
         )
 
     def forward(self, hidden_states, target_action=None):
@@ -58,7 +62,7 @@ class ActionFlowExpert(torch.nn.Module):
         else:
             # For inference: return a prediction based on just the hidden state
             # Use a simple approach by conditioning on a zero target
-            dummy_target = torch.zeros_like(hidden_states[..., :self.action_dim])
+            dummy_target = torch.zeros_like(hidden_states[..., : self.action_dim])
             combined_input = torch.cat([hidden_states, dummy_target], dim=-1)
             flow_vector = self.vector_field(combined_input)
             return flow_vector
@@ -76,8 +80,12 @@ class ActionFlowExpert(torch.nn.Module):
             Predicted action trajectory
         """
         # Start with an initial action guess (zeros)
-        current_action = torch.zeros(initial_state.size(0), self.action_dim,
-                                   device=initial_state.device, dtype=initial_state.dtype)
+        current_action = torch.zeros(
+            initial_state.size(0),
+            self.action_dim,
+            device=initial_state.device,
+            dtype=initial_state.dtype,
+        )
 
         for _ in range(steps):
             # Compute flow vector using current action estimate
@@ -107,7 +115,7 @@ class Pi05Policy(BasePolicy):
         self,
         policy_type: str,
         model_path: str,
-        backbone_type: str = 'siglip_gemma',  # Default to SigLIP-Gemma backbone
+        backbone_type: str = "siglip_gemma",  # Default to SigLIP-Gemma backbone
         use_fast_tokens: bool = True,
         use_flow_matching: bool = True,
         obs_dim: int = 9,
@@ -121,7 +129,9 @@ class Pi05Policy(BasePolicy):
         self.action_dim = action_dim
         self.image_dim = image_dim
         self.device = None
-        self.visual_input_features = visual_input_features or []  # Use provided features or empty list
+        self.visual_input_features = (
+            visual_input_features or []
+        )  # Use provided features or empty list
 
         kind = policy_type.lower()
         if kind != "pi0.5":
@@ -140,6 +150,23 @@ class Pi05Policy(BasePolicy):
 
         # Load the input/output features
         self._load_input_output_features()
+        self._tokenizer = None
+
+    def _get_tokenizer(self):
+        if self._tokenizer is not None:
+            return self._tokenizer
+        try:
+            from transformers import AutoTokenizer
+        except ImportError:
+            return None
+        self._tokenizer = AutoTokenizer.from_pretrained("google/paligemma-3b-pt-224")
+        return self._tokenizer
+
+    def _infer_batch_size(self, observation: dict) -> int:
+        for value in observation.values():
+            if torch.is_tensor(value) and value.dim() > 0:
+                return value.shape[0]
+        return 1
 
     def to_device(self, device: str) -> Any:
         """
@@ -196,63 +223,47 @@ class Pi05Policy(BasePolicy):
         """
         obs = {}
 
-        # Handle language tokens and attention mask first to ensure they're always present
-        # Default to empty language tensors if no task is provided
-        '''if "task" not in observation:
-            # Create empty language tensors with batch size inferred from other tensors
-            batch_size = 1  # Default batch size
-            # Look for batch size in other tensors if available
-            for key, value in observation.items():
-                if torch.is_tensor(value) and value.dim() > 0:
-                    batch_size = value.shape[0]
-                    break
-
-            # Create empty language tokens and attention mask
-            dummy_tokens = torch.zeros(batch_size, 10, dtype=torch.long, device=self.device)
-            dummy_attention_mask = torch.zeros(batch_size, 10, dtype=torch.bool, device=self.device)
-
-            obs["observation.language.tokens"] = dummy_tokens
-            obs["observation.language.attention_mask"] = dummy_attention_mask
-        else:
-            # Handle language tokens for the LeRobot PI05 policy
-            # The policy expects language tokens under observation.language.tokens
-            # Create appropriate language tokens based on the task
-            v = observation["task"]
-            if isinstance(v, list) and len(v) > 0:
-                # Task is a batch of strings - create tokens for each
-                batch_size = len(v)
-                # In a real implementation, use the model's tokenizer
-                dummy_tokens = torch.zeros(batch_size, 10, dtype=torch.long, device=self.device)
-                dummy_attention_mask = torch.zeros(batch_size, 10, dtype=torch.bool, device=self.device)
-                obs["observation.language.tokens"] = dummy_tokens
-                obs["observation.language.attention_mask"] = dummy_attention_mask
-            elif isinstance(v, str):
-                # Single task string - create a batched tensor [1, seq_len]
-                dummy_tokens = torch.zeros(1, 10, dtype=torch.long, device=self.device)
-                dummy_attention_mask = torch.zeros(1, 10, dtype=torch.bool, device=self.device)
-                obs["observation.language.tokens"] = dummy_tokens
-                obs["observation.language.attention_mask"] = dummy_attention_mask
-            else:
-                # If task is already in token format, use as is
-                if torch.is_tensor(v):
-                    tokens_tensor = v.to(self.device)
-                    # Ensure it has the right shape [batch_size, seq_len]
-                    if tokens_tensor.dim() == 1:
-                        tokens_tensor = tokens_tensor.unsqueeze(0)  # Add batch dimension
-                    obs["observation.language.tokens"] = tokens_tensor
-
-                    # Create corresponding attention mask
-                    attention_mask = torch.ones_like(tokens_tensor, dtype=torch.bool, device=self.device)
-                    obs["observation.language.attention_mask"] = attention_mask
+        # Ensure language tokens exist for PI05
+        tokens = observation.get("observation.language.tokens")
+        attention_mask = observation.get("observation.language.attention_mask")
+        if tokens is None:
+            task = observation.get("task")
+            tokenizer = self._get_tokenizer() if task is not None else None
+            if tokenizer is not None:
+                if isinstance(task, str):
+                    texts = [task]
+                elif isinstance(task, list) and all(isinstance(t, str) for t in task):
+                    texts = task
                 else:
-                    # Handle other formats by creating dummy tensors
-                    batch_size = 1
-                    dummy_tokens = torch.zeros(batch_size, 10, dtype=torch.long, device=self.device)
-                    dummy_attention_mask = torch.zeros(batch_size, 10, dtype=torch.bool, device=self.device)
-                    obs["observation.language.tokens"] = dummy_tokens
-                    obs["observation.language.attention_mask"] = dummy_attention_mask
-        
-        '''
+                    texts = [str(task)]
+                max_len = getattr(self._policy.config, "tokenizer_max_length", 200)
+                tokenized = tokenizer(
+                    texts,
+                    max_length=max_len,
+                    truncation=True,
+                    padding="max_length",
+                    padding_side="right",
+                    return_tensors="pt",
+                )
+                tokens = tokenized["input_ids"]
+                attention_mask = tokenized["attention_mask"].to(dtype=torch.bool)
+        if tokens is None:
+            batch_size = self._infer_batch_size(observation)
+            tokens = torch.zeros(batch_size, 10, dtype=torch.long, device=self.device)
+            attention_mask = torch.zeros(
+                batch_size, 10, dtype=torch.bool, device=self.device
+            )
+        else:
+            tokens = tokens.to(self.device)
+            if attention_mask is None:
+                attention_mask = torch.ones_like(
+                    tokens, dtype=torch.bool, device=self.device
+                )
+            else:
+                attention_mask = attention_mask.to(self.device)
+        obs["observation.language.tokens"] = tokens
+        obs["observation.language.attention_mask"] = attention_mask
+
         # Process other observation keys
         for k, v in observation.items():
             if k == "state":
@@ -260,7 +271,7 @@ class Pi05Policy(BasePolicy):
             elif k == "task":
                 # Already handled above
                 obs["task"] = v
-                #continue
+                # continue
             elif k in {"action", "action_is_pad"}:
                 obs[k] = v.to(self.device)
             elif k.startswith("observation.images."):
@@ -384,11 +395,11 @@ class Pi05Policy(BasePolicy):
         try:
             # For current LeRobot, normalization setup might be handled differently
             # Attempt to set up normalization modules based on the available API
-            if hasattr(self._policy, 'setup_normalization'):
+            if hasattr(self._policy, "setup_normalization"):
                 self._policy.setup_normalization(loaded_stats)
             else:
                 # Fallback: directly access normalization attributes if they exist
-                if hasattr(self._policy, 'normalize_inputs'):
+                if hasattr(self._policy, "normalize_inputs"):
                     # This is where the original normalization would be applied
                     pass  # Use the default normalization from the policy
         except Exception:
