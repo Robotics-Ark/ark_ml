@@ -48,7 +48,6 @@ def get_policy_node(cfg: DictConfig) -> BasePolicy:
 
     Returns:
       Policy node.
-
     """
     key = _get_policy_key(cfg)
     builder = _POLICY_BUILDERS.get(key)
@@ -59,37 +58,37 @@ def get_policy_node(cfg: DictConfig) -> BasePolicy:
     return builder()
 
 
+# ------------------------------------------------------------------------
+# BUILDER REGISTRATIONS
+# ------------------------------------------------------------------------
+
 @register_policy("pizero")
 @register_policy("pi0")
 def _build_pizero() -> BasePolicy:
-    """Build and return a PiZero policy node from config.
-
-    Returns:
-      PiZeroPolicyNode .
-    """
+    """Build and return a PiZero policy node from config."""
     from arkml.nodes.pizero_node import PiZeroPolicyNode
-
     return PiZeroPolicyNode
+
+
+@register_policy("pi0.5")
+@register_policy("pi05")
+def _build_pi05():
+    """Build and return a Pi05 policy node from config."""
+    from arkml.nodes.pi05_node import Pi05Node
+    return Pi05Node
 
 
 @register_policy("act")
 def _build_ACT():
-    """Build and return ACT"""
+    """Build and return ACT."""
     from arkml.nodes.act_policy_node import ActPolicyNode
-
     return ActPolicyNode
 
 
 @register_policy("diffusion_policy")
 def _build_diffusion() -> BasePolicy:
-    """Build and return a DiffusionPolicyNode from config.
-
-
-    Returns:
-      DiffusionPolicyNode.
-    """
+    """Build and return a DiffusionPolicyNode."""
     from arkml.nodes.diffusion_node import DiffusionPolicyNode
-
     return DiffusionPolicyNode
 
 
@@ -97,5 +96,4 @@ def _build_diffusion() -> BasePolicy:
 def _build_sb3() -> BasePolicy:
     """Build and return an SB3 RL policy node."""
     from arkml.nodes.sb3_policy_node import SB3RLPolicyNode
-
     return SB3RLPolicyNode

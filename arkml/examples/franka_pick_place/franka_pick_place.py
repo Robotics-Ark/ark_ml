@@ -5,7 +5,7 @@ import numpy as np
 from ark.env.ark_env import ArkEnv
 from ark.tools.log import log
 from ark.utils.scene_status_utils import ObjectState, RobotState
-from ark.utils.utils import ConfigPath
+from arkml.utils.utils import ConfigPath
 from arkml.core.rl.termination_conditions.base_termination_conditions import (
     SuccessCondition,
 )
