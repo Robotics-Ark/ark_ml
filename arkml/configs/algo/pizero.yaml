@@ -3,7 +3,7 @@ model:
   type: PiZeroNet
   name: PiZeroNet
   policy_type: pi0            # 'pi0'
-  model_path: lerobot/pi0
+  model_path: lerobot/pi0_base
   obs_dim: 9 # TODO change it to state_dim
   action_dim: 8         # Action dimension
   obs_horizon: 1        # Observation dimension

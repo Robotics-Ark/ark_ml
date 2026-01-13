@@ -84,6 +84,12 @@ def _build_ACT():
     from arkml.nodes.act_policy_node import ActPolicyNode
     return ActPolicyNode
 
+@register_policy("smolvla")
+def _build_smolvla():
+    """Build and return ACT."""
+    from arkml.nodes.smolvla_node import smolVLApolicynode
+    return smolVLApolicynode
+
 
 @register_policy("diffusion_policy")
 def _build_diffusion() -> BasePolicy:

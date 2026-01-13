@@ -12,7 +12,7 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 
 
-class PiZeroDataset(Dataset):
+class smolVLADataset(Dataset):
     def __init__(
         self,
         dataset_path,
@@ -65,6 +65,7 @@ class PiZeroDataset(Dataset):
                 if f.endswith(".pkl")
             ]
         )
+        file_list=file_list[:2]
 
         for fpath in file_list:
             with open(fpath, "rb") as f:
@@ -133,7 +134,7 @@ class PiZeroDataset(Dataset):
         traj_list = self._get_traj_list(fpath)
         trajectory = traj_list[traj_idx]
 
-        sample: dict[str, Any] = {"task": "pick and place the cube"}
+        sample: dict[str, Any] = {"task": "pick and place the object"}
 
         state_array = np.asarray(
             trajectory["state"][6], dtype=np.float32

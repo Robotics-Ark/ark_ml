@@ -20,5 +20,5 @@ video_cfg:
   save_steps : 500
 
 # Default channel config file used by PolicyNode. Override via CLI if needed.
-channel_schema: ark_framework/ark/configs/franka_panda.yaml
+channel_schema: /nfs/rlteam2/abhineet/dsagent/agent/ark_framework/ark/configs/franka_panda.yaml
 global_config: ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml
