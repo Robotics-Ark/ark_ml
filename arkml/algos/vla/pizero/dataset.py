@@ -133,7 +133,7 @@ class PiZeroDataset(Dataset):
         traj_list = self._get_traj_list(fpath)
         trajectory = traj_list[traj_idx]
 
-        sample: dict[str, Any] = {"task": "pick and place the cube"}
+        sample: dict[str, Any] = {"task": trajectory.get("prompt")}
 
         state_array = np.asarray(
             trajectory["state"][6], dtype=np.float32
