@@ -133,7 +133,7 @@ class Pi05Dataset(Dataset):
         traj_list = self._get_traj_list(fpath)
         trajectory = traj_list[traj_idx]
 
-        sample: dict[str, Any] = {"task": "Pick and plce the cube"}
+        sample: dict[str, Any] = {"task": trajectory.get("prompt")}
 
         state_array = np.asarray(
             trajectory["state"][6], dtype=np.float32
@@ -170,6 +170,5 @@ class Pi05Dataset(Dataset):
 
         sample["action"] = torch.from_numpy(padded_actions)
         sample["action_is_pad"] = torch.from_numpy(action_is_pad)
-        
 
         return sample
