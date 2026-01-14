@@ -35,12 +35,15 @@ class Registry:
         if name == "DiffusionPolicyModel":
             import arkml.algos.diffusion_policy.algorithm
             import arkml.algos.diffusion_policy.models
-        elif name == "PiZeroNet":
+        elif name == "PiZeroNet" or name == "pizero":
             import arkml.algos.vla.pizero.algorithm
             import arkml.algos.vla.pizero.models
         elif name == "act":
             import arkml.algos.act.algorithm
             import arkml.algos.act.models
+        elif name == "smolvla" or "smolVLAnet":
+            import arkml.algos.vla.smolvla.algorithm
+            import arkml.algos.vla.smolvla.models
         elif name == "sb3rl":
             import arkml.algos.rl.sb3_algorithm
             import arkml.algos.rl.sb3_models
