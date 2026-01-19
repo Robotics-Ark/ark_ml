@@ -1,0 +1,25 @@
+defaults:
+  - algo: pizero
+  - data: pizero_dataset
+
+# Base rollout environment config
+rollout_env:
+  env_name: policy_rollout
+  namespace: ark
+  sim: true
+  channel_schema: ark_framework/ark/configs/franka_panda.yaml
+  global_config: ark_ml/arkml/examples/franka_pick_place/franka_config/global_config.yaml
+
+# Policy model config (uses arkml.core.policy_registry by default)
+policy:
+  name: pi05
+  class_path: null
+  device: cpu
+  kwargs: {}
+
+# Termination condition config
+termination:
+  name: timeout
+  class_path: arkml.core.rl.termination_conditions.timeout.Timeout
+  kwargs:
+    max_steps: 500
