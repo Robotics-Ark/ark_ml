@@ -10,7 +10,11 @@ from arkml.core.policy import BasePolicy
 from arkml.core.registry import MODELS
 from arkml.utils.utils import print_trainable_summary
 from lerobot.configs.types import FeatureType, PolicyFeature
-from lerobot.processor.normalize_processor import NormalizerProcessorStep as Normalize, UnnormalizerProcessorStep as Unnormalize
+
+# from lerobot.processor.normalize_processor import (
+#     NormalizerProcessorStep as Normalize,
+#     UnnormalizerProcessorStep as Unnormalize,
+# )
 from lerobot.policies.pi0.modeling_pi0 import PI0Policy
 from torch import tensor
 
@@ -54,6 +58,52 @@ class PiZeroNet(BasePolicy):
 
         self._policy.config.n_action_steps = pred_horizon
         self._load_input_output_features()
+        self._tokenizer = None
+
+    def _get_tokenizer(self):
+        if self._tokenizer is not None:
+            return self._tokenizer
+        try:
+            from transformers import AutoTokenizer
+        except ImportError:
+            return None
+        self._tokenizer = AutoTokenizer.from_pretrained("google/paligemma-3b-pt-224")
+        return self._tokenizer
+
+    def _infer_batch_size(self, observation: dict) -> int:
+        for value in observation.values():
+            if torch.is_tensor(value) and value.dim() > 0:
+                return value.shape[0]
+        return 1
+
+    def _pad_action_sequence(self, action: torch.Tensor) -> torch.Tensor:
+        chunk_size = getattr(self._policy.config, "chunk_size", None)
+        if chunk_size is None:
+            return action
+        if action.dim() == 2:
+            action = action.unsqueeze(0)
+        if action.shape[1] >= chunk_size:
+            return action[:, :chunk_size]
+        pad_len = chunk_size - action.shape[1]
+        pad_shape = (action.shape[0], pad_len, action.shape[2])
+        pad = torch.zeros(pad_shape, dtype=action.dtype, device=action.device)
+        return torch.cat([action, pad], dim=1)
+
+    def _pad_action_is_pad(
+        self, action_is_pad: torch.Tensor, batch_size: int
+    ) -> torch.Tensor:
+        chunk_size = getattr(self._policy.config, "chunk_size", None)
+        if chunk_size is None:
+            return action_is_pad
+        if action_is_pad.dim() == 1:
+            action_is_pad = action_is_pad.unsqueeze(0)
+        if action_is_pad.shape[1] >= chunk_size:
+            return action_is_pad[:, :chunk_size]
+        pad_len = chunk_size - action_is_pad.shape[1]
+        pad = torch.ones(
+            batch_size, pad_len, dtype=action_is_pad.dtype, device=action_is_pad.device
+        )
+        return torch.cat([action_is_pad, pad], dim=1)
 
     def to_device(self, device: str) -> Any:
         """
@@ -89,7 +139,7 @@ class PiZeroNet(BasePolicy):
 
     def prepare_input(self, observation: dict) -> dict[str, Any]:
         """
-        Convert an observation dict into the policy’s expected input format.
+        Convert an observation dict into the policy's expected input format.
 
         Expected keys in `observation`:
             - "image": torch.Tensor of shape (B, C, H, W)
@@ -104,19 +154,76 @@ class PiZeroNet(BasePolicy):
             Processed observation with keys:
                 - "observation.images.image": torch.Tensor on `self.device`
                 - "observation.state": torch.Tensor on `self.device`
-                - "task": str (unchanged)
+                - "observation.language.tokens": torch.Tensor on `self.device`
+                - "observation.language.attention_mask": torch.Tensor on `self.device`
                 - "action": torch.Tensor on `self.device` (if present)
         """
         obs = {}
+
+        # Ensure language tokens exist for PI05
+        tokens = observation.get("observation.language.tokens")
+        attention_mask = observation.get("observation.language.attention_mask")
+        if tokens is None:
+            task = observation.get("task")
+            tokenizer = self._get_tokenizer() if task is not None else None
+            if tokenizer is not None:
+                if isinstance(task, str):
+                    texts = [task]
+                elif isinstance(task, list) and all(isinstance(t, str) for t in task):
+                    texts = task
+                else:
+                    texts = [str(task)]
+                max_len = getattr(self._policy.config, "tokenizer_max_length", 200)
+                tokenized = tokenizer(
+                    texts,
+                    max_length=max_len,
+                    truncation=True,
+                    padding="max_length",
+                    padding_side="right",
+                    return_tensors="pt",
+                )
+                tokens = tokenized["input_ids"]
+                attention_mask = tokenized["attention_mask"].to(dtype=torch.bool)
+        if tokens is None:
+            batch_size = self._infer_batch_size(observation)
+            tokens = torch.zeros(batch_size, 10, dtype=torch.long, device=self.device)
+            attention_mask = torch.zeros(
+                batch_size, 10, dtype=torch.bool, device=self.device
+            )
+        else:
+            tokens = tokens.to(self.device)
+            if attention_mask is None:
+                attention_mask = torch.ones_like(
+                    tokens, dtype=torch.bool, device=self.device
+                )
+            else:
+                attention_mask = attention_mask.to(self.device)
+        obs["observation.language.tokens"] = tokens
+        obs["observation.language.attention_mask"] = attention_mask
+
+        # Process other observation keys
         for k, v in observation.items():
             if k == "state":
                 obs["observation.state"] = v.to(self.device)
             elif k == "task":
+                # Already handled above
                 obs["task"] = v
+                # continue
             elif k in {"action", "action_is_pad"}:
-                obs[k] = v.to(self.device)
+                if k == "action":
+                    v = v.to(self.device)
+                    obs[k] = self._pad_action_sequence(v)
+                else:
+                    v = v.to(self.device)
+                    batch_size = self._infer_batch_size(observation)
+                    obs[k] = self._pad_action_is_pad(v, batch_size)
+            elif k.startswith("observation.images."):
+                for im_key in ArkMLContext.visual_input_features:
+                    obs[f"observation.images.{im_key}"] = v.to(self.device)
             elif k in ArkMLContext.visual_input_features:
                 obs[f"observation.images.{k}"] = v.to(self.device)
+            elif k == "image":
+                obs["observation.images.image"] = v.to(self.device)
         return obs
 
     def predict(self, obs: dict[str, Any], **kwargs) -> tensor:
@@ -224,17 +331,17 @@ class PiZeroNet(BasePolicy):
         if norm_map is None:
             return
 
-        # Refresh buffers with current feature schemas
-        self._policy.normalize_inputs = Normalize(
-            self._policy.config.input_features, norm_map, loaded_stats
-        )
-        if hasattr(self._policy, "normalize_targets"):
-            self._policy.normalize_targets = Normalize(
-                self._policy.config.output_features, norm_map, loaded_stats
-            )
-        self._policy.unnormalize_outputs = Unnormalize(
-            self._policy.config.output_features, norm_map, loaded_stats
-        )
+        # # Refresh buffers with current feature schemas
+        # self._policy.normalize_inputs = Normalize(
+        #     self._policy.config.input_features, norm_map, loaded_stats
+        # )
+        # if hasattr(self._policy, "normalize_targets"):
+        #     self._policy.normalize_targets = Normalize(
+        #         self._policy.config.output_features, norm_map, loaded_stats
+        #     )
+        # self._policy.unnormalize_outputs = Unnormalize(
+        #     self._policy.config.output_features, norm_map, loaded_stats
+        # )
 
     def _load_input_output_features(self) -> None:
         input_features = {

@@ -1,4 +1,4 @@
-from collections import deque
+    from collections import deque
 from typing import Any
 
 import numpy as np
@@ -98,7 +98,9 @@ class smolVLApolicynode(PolicyNode):
             ]
         )
         state = torch.from_numpy(state).float().unsqueeze(0)  # (1, D)
-        img = torch.from_numpy(ob["sensors::image_top::rgb"].copy()).permute(
+        img = torch.from_numpy(
+            ob[f"sensors::{ArkMLContext.visual_input_features[0]}::rgb"].copy()
+        ).permute(
             2, 0, 1
         )  # (C, H, W)
         img = img.float().div(255.0).unsqueeze(0)  # (1, C, H, W)
@@ -123,7 +125,6 @@ class smolVLApolicynode(PolicyNode):
             #     raise KeyError(f"Missing visual input '{cam_name}' in observation")
             obs[cam_name] = img  # _image_to_tensor(value).unsqueeze(0)
         return obs
-
     def predict(self, obs_seq):
         """Compute the action for the given observation batch.
 

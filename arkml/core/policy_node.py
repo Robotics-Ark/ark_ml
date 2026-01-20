@@ -135,6 +135,7 @@ class PolicyNode(ABC, BaseNode):
         if callable(reset_hook):
             reset_hook()
         result = self._env.reset()
+
         # Gymnasium API
         if isinstance(result, tuple):
             self.obs = result[0]  # result = (obs, info)

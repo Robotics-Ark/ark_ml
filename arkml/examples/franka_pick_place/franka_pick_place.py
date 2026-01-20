@@ -52,13 +52,13 @@ class RobotNode(ArkEnv):
     def __init__(self, max_steps: int, config_path: str, channel_schema: str):
 
         self.max_steps = max_steps
-        self.config = ConfigPath(config_path).read_yaml()
+        self.config = ConfigPath("/nfs/rlteam2/abhineet/dsagent/agent/ark_diffusion_policies_on_franka/diffusion_policy/config/global_config.yaml").read_yaml()
         self.mode = self.config.get("policy_mode")
 
         super().__init__(
             environment_name="ark_franka_env",
             channel_schema=channel_schema,
-            global_config=config_path,
+            global_config="/nfs/rlteam2/abhineet/dsagent/agent/ark_diffusion_policies_on_franka/diffusion_policy/config/global_config.yaml",
             sim=True,
         )
 
@@ -91,6 +91,7 @@ class RobotNode(ArkEnv):
         """
 
         # Reset the policy node state at the beginning of the episode
+
         try:
             log.info("Resetting Policy Node ...")
             self.send_service_request(
@@ -98,6 +99,7 @@ class RobotNode(ArkEnv):
                 request=flag_t(),
                 response_type=string_t,
             )
+
             log.info("Resetting Environment ...")
             observation, info = self.reset()
 

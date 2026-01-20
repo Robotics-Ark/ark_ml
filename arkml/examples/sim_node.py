@@ -5,7 +5,7 @@ from pathlib import Path
 
 # Path to your configuration file
 
-CONFIG_PATH = str(Path(__file__).parent / "./franka_config/global_config.yaml")
+CONFIG_PATH = str(Path(__file__).parent / "./franka_pick_place/franka_config/global_config.yaml")
 
 
 # Create your custom simulator by inheriting from SimulatorNode
